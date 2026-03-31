@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
+import { AppProviders } from "@/components/AppProviders";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -13,9 +15,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Applyfy — Cover letters from your resume",
+  title: {
+    default: "Applyfy — AI-powered job application suite",
+    template: "%s · Applyfy",
+  },
   description:
-    "Paste a job link and your resume to generate a tailored cover letter.",
+    "Upload your resume and a job listing URL. Get a match score, gap analysis, tailored cover letter, and interview prep.",
 };
 
 export default function RootLayout({
@@ -26,9 +31,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="flex min-h-full flex-col font-sans antialiased">
+        <AppProviders>{children}</AppProviders>
+      </body>
     </html>
   );
 }

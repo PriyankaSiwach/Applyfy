@@ -1,177 +1,51 @@
 import { NextResponse } from "next/server";
-import { parseResumeJobBody } from "@/lib/parseResumeJobBody";
+import {
+  extractKeyRequirementsFromJob,
+  fetchJobDescriptionText,
+  MAX_JOB_CHARS,
+} from "@/lib/jobDescription";
+import type {
+  InterviewPrep,
+  InterviewRiskArea,
+  PredictedQuestion,
+  RequirementCheck,
+} from "@/lib/analysisTypes";
+import { parseAnalyzeBody } from "@/lib/parseAnalyzeBody";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
 
 export const runtime = "nodejs";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
+const OPENAI_MODEL = "gpt-4o";
 
-/** When true, skips OpenAI, job fetch, and strict resume length — for local testing only. */
-function isMockAnalysisEnabled(): boolean {
-  const raw =
-    process.env.USE_MOCK_ANALYSIS ??
-    process.env.usemockanalysis ??
-    process.env.NEXT_PUBLIC_USE_MOCK_ANALYSIS;
-  if (!raw) return false;
-  const v = raw
-    .trim()
-    .replace(/^["']|["']$/g, "")
-    .toLowerCase();
-  return v === "true" || v === "1" || v === "yes" || v === "on";
-}
-
-function mockAnalysisResponse(resumePreview: string): {
-  matchScore: number;
-  matchedSkills: string[];
-  missingSkills: string[];
-  bulletSuggestions: string[];
-  sectionSuggestions: string[];
-  atsKeywords: string[];
-} {
-  const hint =
-    resumePreview.length > 60
-      ? `${resumePreview.slice(0, 60).trim()}…`
-      : resumePreview.trim() || "(resume text)";
-  return {
-    matchScore: 68,
-    matchedSkills: [
-      `React / UI — mock: align bullets with job keywords (preview: ${hint})`,
-      "TypeScript — mock: add 1–2 concrete file/area examples from your work",
-      "Collaboration — mock: cite cross-functional or review/mentorship if true",
-    ],
-    missingSkills: [
-      "System design depth — mock: job may expect distributed systems vocabulary",
-      "Observability (metrics/tracing) — mock: add if you operated production services",
-    ],
-    bulletSuggestions: [
-      "Mock bullet: Led migration of [component] to TypeScript, cutting production incidents by [X]% over [N] months; partnered with [team] on rollout and QA.",
-      "Mock bullet: Shipped [feature] used by [users/events/day]; improved p95 latency from [A]ms to [B]ms by [technique].",
-      "Mock bullet: Owned on-call for [service]; reduced MTTR from [X] to [Y] via runbooks and alerting on [signals].",
-      "Mock bullet: Drove A/B test on [surface]; lifted [metric] by [X]% with zero regression on [guardrail].",
-    ],
-    sectionSuggestions: [
-      "Mock: Tighten Summary to 3 lines: title + stack + one measurable win tied to this role.",
-      "Mock: Reorder Experience so the most relevant role is first; mirror JD language where honest.",
-      "Mock: Add a Skills line grouped by area (Frontend / Infra / Data) to match ATS scans.",
-      "Mock: Projects: one line each on user impact and tech; drop stack-only blurbs.",
-    ],
-    atsKeywords: [
-      "TypeScript",
-      "React",
-      "Next.js",
-      "REST",
-      "CI/CD",
-      "observability",
-      "A/B testing",
-      "cross-functional",
-    ],
-  };
+function shortenSkillLabel(text: string, max = 100): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1)}…`;
 }
 
 const MAX_RESUME_CHARS = 24_000;
-const MAX_JOB_CHARS = 18_000;
 const MIN_MEANINGFUL_CHARS = 80;
-
-const JOB_SECTION_PATTERNS = [
-  /(?:responsibilit(?:y|ies)|what you(?:'ll)?\s*(?:do|own)|key responsibilities)[^:]{0,40}:?\s*([\s\S]{0,8000}?)(?=(?:qualification|requirement|what we|who you|benefits|about (?:the )?role|nice to have|bonus|perks)\b|$)/gi,
-  /(?:qualification|requirement)s?[^:]{0,40}:?\s*([\s\S]{0,8000}?)(?=(?:responsibilit|what you|benefits|nice to have|bonus|apply|about (?:the )?company)\b|$)/gi,
-  /(?:what we (?:look|need|want) for|who you are|about you|your background|skills?(?:\s+you\s+have)?)[^:]{0,40}:?\s*([\s\S]{0,8000}?)(?=(?:responsibilit|benefits|apply|qualification)\b|$)/gi,
-  /(?:nice to have|bonus|preferred)[^:]{0,40}:?\s*([\s\S]{0,4000}?)(?=(?:apply|benefits|responsibilit)\b|$)/gi,
-];
-
-function stripHtmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<\/(p|div|br|li|h[1-6]|tr)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s*\n\s*/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function extractPrimaryContent(html: string): string {
-  const lowered = html.toLowerCase();
-  const candidates: string[] = [];
-
-  const article = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-  if (article) candidates.push(article[1]);
-
-  const main = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
-  if (main) candidates.push(main[1]);
-
-  const roleMain = html.match(
-    /(?:id|class)=["'][^"']*(?:job|description|posting|detail)[^"']*["'][^>]*>([\s\S]{200,12000}?)<\/(?:div|section)>/i,
-  );
-  if (roleMain) candidates.push(roleMain[1]);
-
-  if (candidates.length === 0) {
-    const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-    candidates.push(body ? body[1] : html);
-  }
-
-  return candidates.sort((a, b) => b.length - a.length)[0] ?? html;
-}
-
-function extractMeaningfulJobRequirements(cleanedPlain: string): string {
-  const sections: string[] = [];
-  for (const re of JOB_SECTION_PATTERNS) {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(cleanedPlain)) !== null) {
-      const chunk = m[1]?.trim();
-      if (chunk && chunk.length > 40) sections.push(chunk);
-    }
-  }
-
-  const merged = sections.length
-    ? [...new Set(sections)].join("\n\n---\n\n")
-    : cleanedPlain;
-
-  return merged.slice(0, MAX_JOB_CHARS);
-}
-
-async function fetchJobDescriptionText(jobLink: string): Promise<string> {
-  const res = await fetch(jobLink, {
-    method: "GET",
-    redirect: "follow",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; Applyfy/1.0; +https://applyfy.app) AppleWebKit/537.36 (KHTML, like Gecko)",
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    signal: AbortSignal.timeout(25_000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Could not fetch job page (HTTP ${res.status})`);
-  }
-
-  const html = await res.text();
-  const primary = extractPrimaryContent(html);
-  const plain = stripHtmlToText(primary);
-  const meaningful = extractMeaningfulJobRequirements(plain);
-  const fallback = plain.slice(0, MAX_JOB_CHARS);
-  return meaningful.length > 200 ? meaningful : fallback;
-}
 
 const ANALYSIS_JSON_SCHEMA = `Return a single JSON object with exactly these keys (no markdown, no prose outside JSON):
 {
   "matchScore": <integer 0-100, realistic based on overlap and must-have gaps>,
-  "matchedSkills": <string[] — each item: skill/area + short evidence tied to THIS resume (not generic)>,
-  "missingSkills": <string[] — each item: gap from the job + why it matters for this role>,
+  "matchExplanation": <string[] — exactly 3 bullets; each explains WHY the score; cite specific job requirements and resume evidence>,
+  "matchedSkills": <string[] — 6-12 pill-friendly labels, each 1-4 words (examples: "React", "API Design", "System Design"); no punctuation-heavy phrases, no full sentences, no evidence text>,
+  "missingSkills": <string[] — 4-10 pill-friendly labels, each 1-4 words representing missing/weak requirements; no full sentences>,
   "bulletSuggestions": <string[] — 4-6 FAANG-caliber resume bullets: strong verbs, metrics where plausible, scoped to THIS job; not generic filler>,
   "sectionSuggestions": <string[] — 4-6 concrete section-level fixes (Summary, Experience order, Projects, etc.) referencing this JD>,
-  "atsKeywords": <string[] — 6-10 missing or underused keywords/phrases from the JD to add for ATS; short phrases only>
+  "atsMatched": <string[] — 4-12 short keyword phrases from the JD that ARE clearly evidenced on the resume (for ATS “matched” display)>,
+  "atsKeywords": <string[] — 6-10 missing or underused keywords/phrases from the JD to add for ATS; short phrases only>,
+  "requirementChecks": <array of 8 to 12 objects, each exactly: { "skill": string (short requirement label), "present": boolean, "evidence": string (quote or paraphrase from resume if present; say what's missing if false) }> — extract ONLY skills, responsibilities, and qualifications from the job text; omit salary, benefits-only lines, legal/EEO/privacy boilerplate, and irrelevant fluff>,
+  "interviewPrep": {
+    "intro": <string>,
+    "behavioral": <array of 3 to 4 objects: { "question": string, "context": string, "fullAnswer": string, "tip": string }>,
+    "technical": <array of 3 to 4 objects: { "question": string, "context": string, "fullAnswer": string, "tip": string }>,
+    "starStories": <array of exactly 2 objects: { "title": string, "S": string, "T": string, "A": string, "R": string }>,
+    "redFlags": <array of exactly 2 objects: { "issue": string, "howToFrame": string }>
+  }
 }`;
 
 function extractJsonObject(content: string): Record<string, unknown> {
@@ -203,10 +77,185 @@ function asStringArray(v: unknown): string[] {
   return v.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
 }
 
+function toPillLabel(text: string): string {
+  const cleaned = text
+    .replace(/[–—:;,.(){}[\]|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = cleaned.split(" ").filter(Boolean).slice(0, 4);
+  return words.join(" ");
+}
+
+function asPillLabelArray(v: unknown, maxItems = 12): string[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of v) {
+    if (typeof raw !== "string") continue;
+    const label = toPillLabel(raw);
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
 function asScore(v: unknown): number {
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return 0;
   return Math.min(100, Math.max(0, Math.round(n)));
+}
+
+function asRequirementChecks(v: unknown): RequirementCheck[] {
+  if (!Array.isArray(v)) return [];
+  const out: RequirementCheck[] = [];
+  for (const item of v) {
+    if (typeof item !== "object" || item === null) continue;
+    const o = item as Record<string, unknown>;
+    const skill = typeof o.skill === "string" ? o.skill.trim() : "";
+    const evidence = typeof o.evidence === "string" ? o.evidence.trim() : "";
+    const present = o.present === true;
+    if (!skill) continue;
+    out.push({
+      skill: shortenSkillLabel(skill, 120),
+      present,
+      evidence:
+        evidence ||
+        (present
+          ? "Supported by resume content."
+          : "Not clearly evidenced in resume."),
+    });
+  }
+  return out.slice(0, 12);
+}
+
+function asRiskAreas(v: unknown): InterviewRiskArea[] {
+  if (!Array.isArray(v)) return [];
+  const out: InterviewRiskArea[] = [];
+  for (const item of v) {
+    if (typeof item !== "object" || item === null) continue;
+    const o = item as Record<string, unknown>;
+    const gap = typeof o.gap === "string" ? o.gap.trim() : "";
+    let script = typeof o.script === "string" ? o.script.trim() : "";
+    if (!script && typeof o.howToExplain === "string") {
+      script = o.howToExplain.trim();
+    }
+    if (gap && script) out.push({ gap, script });
+  }
+  return out.slice(0, 6);
+}
+
+function asPredictedQuestionsRaw(v: unknown): PredictedQuestion[] {
+  if (!Array.isArray(v)) return [];
+  const out: PredictedQuestion[] = [];
+  for (const item of v) {
+    if (typeof item !== "object" || item === null) continue;
+    const o = item as Record<string, unknown>;
+    const question = typeof o.question === "string" ? o.question.trim() : "";
+    const context = typeof o.context === "string" ? o.context.trim() : "";
+    const fullAnswer =
+      typeof o.fullAnswer === "string" ? o.fullAnswer.trim() : "";
+    const tip = typeof o.tip === "string" ? o.tip.trim() : "";
+    const kind: PredictedQuestion["kind"] =
+      o.kind === "technical" ? "technical" : "behavioral";
+    if (question && context && fullAnswer && tip) {
+      out.push({ question, context, fullAnswer, tip, kind });
+    }
+  }
+  return out.slice(0, 12);
+}
+
+function normalizeInterviewPrep(
+  raw: unknown,
+): InterviewPrep {
+  let introPitch = "";
+  let behavioral: PredictedQuestion[] = [];
+  let technical: PredictedQuestion[] = [];
+  let starStories: {
+    title: string;
+    S: string;
+    T: string;
+    A: string;
+    R: string;
+  }[] = [];
+  let redFlags: InterviewRiskArea[] = [];
+
+  if (typeof raw === "object" && raw !== null) {
+    const o = raw as Record<string, unknown>;
+    introPitch =
+      typeof o.intro === "string"
+        ? o.intro.trim()
+        : typeof o.introPitch === "string"
+          ? o.introPitch.trim()
+          : "";
+    behavioral = asPredictedQuestionsRaw(o.behavioral).map((q) => ({
+      ...q,
+      kind: "behavioral" as const,
+    }));
+    technical = asPredictedQuestionsRaw(o.technical).map((q) => ({
+      ...q,
+      kind: "technical" as const,
+    }));
+    if (Array.isArray(o.starStories)) {
+      starStories = o.starStories
+        .filter(
+          (s): s is { title: string; S: string; T: string; A: string; R: string } =>
+            typeof s === "object" &&
+            s !== null &&
+            typeof (s as { title?: unknown }).title === "string" &&
+            typeof (s as { S?: unknown }).S === "string" &&
+            typeof (s as { T?: unknown }).T === "string" &&
+            typeof (s as { A?: unknown }).A === "string" &&
+            typeof (s as { R?: unknown }).R === "string",
+        )
+        .map((s) => ({
+          title: s.title.trim(),
+          S: s.S.trim(),
+          T: s.T.trim(),
+          A: s.A.trim(),
+          R: s.R.trim(),
+        }))
+        .slice(0, 2);
+    }
+    if (Array.isArray(o.redFlags)) {
+      redFlags = o.redFlags
+        .filter(
+          (r): r is { issue: string; howToFrame: string } =>
+            typeof r === "object" &&
+            r !== null &&
+            typeof (r as { issue?: unknown }).issue === "string" &&
+            typeof (r as { howToFrame?: unknown }).howToFrame === "string",
+        )
+        .map((r) => ({
+          gap: r.issue.trim(),
+          script: r.howToFrame.trim(),
+        }))
+        .slice(0, 2);
+    }
+  }
+
+  behavioral = behavioral.slice(0, 4);
+  technical = technical.slice(0, 4);
+  const predictedQuestions = [...behavioral, ...technical].slice(0, 8);
+  const likelyQuestions = predictedQuestions.map((q) => q.question);
+  const keyStories = starStories.map(
+    (s) => `${s.title}: S) ${s.S} T) ${s.T} A) ${s.A} R) ${s.R}`,
+  );
+
+  return {
+    introPitch,
+    behavioral,
+    technical,
+    redFlags,
+    starStories,
+    likelyQuestions,
+    keyStories,
+    riskAreas: redFlags,
+    predictedQuestions,
+  };
 }
 
 async function runAnalysisWithOpenAI({
@@ -216,29 +265,112 @@ async function runAnalysisWithOpenAI({
   resume: string;
   jobDescription: string;
 }) {
-  const system = `You are a principal recruiter and ex-FAANG hiring manager. You compare ONE job description with ONE resume.
+  const system = `You are a senior technical recruiter and resume strategist with 15 years of experience at top tech companies.
 
-Rules:
-- Ground every point in quoted facts from the job description text and resume text. No vague advice.
-- Extract required skills, tools, domains, and seniority signals from the job description first.
-- matchedSkills: only skills/areas where the resume shows credible evidence; phrase each as "Skill — evidence: …".
-- missingSkills: gaps that matter for this specific posting (not random tech).
-- matchScore: weighted by must-haves in the JD; penalize missing core requirements.
-- bulletSuggestions: write bullets as if for a top-tier tech resume (action + scope + metric + tech); tailor wording to the JD keywords.
-- sectionSuggestions: actionable edits (what to move, rename, quantify, cut).
-- atsKeywords: terms from the JD that are absent or weak on the resume; prioritize nouns/phrases applicant tracking systems scan for.
+ANALYZE PROMPT:
+You are a senior technical recruiter and resume strategist with 15 years of experience at top tech companies. Analyze this resume against this job posting with brutal honesty and precision.
 
+Resume: {resumeText}
+Job Posting: {jobText}
+
+Return a JSON object with exactly these keys:
+
+"keywords": array of 12 objects {skill, found}
+- Extract the most critical technical and soft skills from the job posting
+- found: true if clearly evidenced in resume, false if absent
+- Short names only: "React", "Docker", "Team leadership"
+- Order by importance to the role
+
+"strengths": array of exactly 4 strings
+- Each must name a SPECIFIC skill or experience from THIS resume that matches THIS job
+- Format: "[Skill] — [what the resume shows] — [why it matters for this role]"
+- Example: "React expertise — 3 projects using React with measurable outcomes — directly matches the posting's emphasis on frontend ownership"
+- Never generic. Never repeat the same structure twice.
+
+"gaps": array of exactly 3 strings
+- Real gaps between THIS resume and THIS job only
+- Format: "[Missing area] — [what the job requires] — [how to address it in 1 line]"
+- Be specific and actionable, not discouraging
+
+"bullets": array of 3 improved resume bullet strings
+- Rewrite weak bullets from the resume to be stronger for THIS specific role
+- Use metrics where possible
+- Start each with a strong action verb
+- Tailor language to match the job posting's vocabulary
+
+MATCH PROMPT:
+You are an ATS system and senior hiring manager combined. Score this candidate with precision.
+
+Resume: {resumeText}
+Job Posting: {jobText}
+
+Return a JSON object with exactly these keys:
+
+"score": integer between 0-100
+- Calculate genuinely based on: skills overlap (40%), experience level fit (30%), domain knowledge match (20%), culture/soft skills fit (10%)
+- Be honest — a junior resume against a senior role should score 40-55, not 70+
+- Never return the same score twice unless the inputs are identical
+
+"matched": array of 4 short skill labels (1-3 words each)
+- Only skills CLEARLY present in both resume and job posting
+
+"missing": array of 3 short skill labels (1-3 words each)
+- Only the most critical gaps that would concern a recruiter
+
+"scoreLabel": one of "Needs work", "Partial fit", "Good fit", "Strong match" based on score range
+
+"reasons": array of exactly 3 strings
+- Honest, specific explanations for why the score is what it is
+- Reference actual content from both documents
+- No filler sentences
+
+INTERVIEW PREP PROMPT:
+You are a senior hiring manager and interview coach. Generate deeply personalized interview prep for this exact candidate and role.
+
+Resume: {resumeText}
+Job Posting: {jobText}
+
+Return JSON with these keys:
+
+'intro': A confident 5-6 sentence spoken introduction.
+- Sentence 1: Name + degree/background + top 2 skills relevant to THIS job
+- Sentence 2: Reference a SPECIFIC project from the resume with a real result or metric
+- Sentence 3: Connect that experience to what THIS job needs
+- Sentence 4: Why THIS company specifically excites them
+- Sound natural, warm, and confident — not robotic
+- Max 150 words
+
+'behavioral': array of 4 objects {question, context, fullAnswer, tip}
+- question: specific to THIS job posting's responsibilities
+- context: one sentence on why interviewers ask this
+- fullAnswer: a complete 4-5 sentence model answer written in first person using ACTUAL projects/experience from the resume. Include a metric or outcome. End with a lesson learned.
+- tip: one tactical sentence on delivery
+
+'technical': array of 4 objects {question, context, fullAnswer, tip}
+- question: tests a skill explicitly listed in THIS job
+- context: what the interviewer is really evaluating
+- fullAnswer: a complete answer that walks through the concept AND ties it to something in the candidate's resume. 4-5 sentences.
+- tip: what to emphasize or avoid
+
+'starStories': array of 2 objects {title, S, T, A, R}
+- Built from REAL experiences in the resume
+- Each field is 2 sentences minimum
+- R must include a specific outcome or metric
+
+'redFlags': array of 2 objects {issue, howToFrame}
+- issue: a real weakness this resume has for this role
+- howToFrame: a complete 2-3 sentence script the candidate can actually say in the interview
+
+Return only valid JSON. No markdown, no explanation text outside the JSON.
+
+Now transform these outputs into this required API schema exactly:
 ${ANALYSIS_JSON_SCHEMA}`;
 
-  const user = `Job description (scraped text; may include noise):
----
-${jobDescription.slice(0, MAX_JOB_CHARS)}
----
-
-Candidate resume (plain text):
----
+  const user = `resumeText:
 ${resume.slice(0, MAX_RESUME_CHARS)}
----`;
+
+jobText:
+${jobDescription.slice(0, MAX_JOB_CHARS)}`;
 
   const completion = await fetch(OPENAI_API_URL, {
     method: "POST",
@@ -253,7 +385,7 @@ ${resume.slice(0, MAX_RESUME_CHARS)}
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      max_tokens: 4096,
+      max_tokens: 6144,
       temperature: 0.35,
     }),
   });
@@ -269,13 +401,45 @@ ${resume.slice(0, MAX_RESUME_CHARS)}
   const content = data.choices?.[0]?.message?.content ?? "";
   const obj = extractJsonObject(content);
 
+  const finalScore = asScore(obj.matchScore);
+
+  const requirementChecks = asRequirementChecks(obj.requirementChecks);
+  if (requirementChecks.length < 8) {
+    throw new Error("Analysis response incomplete: requirement checks missing.");
+  }
+
+  const matchExplanation = asStringArray(obj.matchExplanation).slice(0, 3);
+  if (matchExplanation.length < 3) {
+    throw new Error("Analysis response incomplete: match explanation missing.");
+  }
+
+  const missingSkills = asStringArray(obj.missingSkills);
+  if (missingSkills.length === 0) {
+    throw new Error("Analysis response incomplete: missing skills missing.");
+  }
+
+  const interviewPrep = normalizeInterviewPrep(obj.interviewPrep);
+  if (
+    !interviewPrep.introPitch ||
+    interviewPrep.behavioral.length < 3 ||
+    interviewPrep.technical.length < 3 ||
+    interviewPrep.starStories.length < 2 ||
+    interviewPrep.redFlags.length < 2
+  ) {
+    throw new Error("Analysis response incomplete: interview prep missing.");
+  }
+
   return {
-    matchScore: asScore(obj.matchScore),
-    matchedSkills: asStringArray(obj.matchedSkills),
-    missingSkills: asStringArray(obj.missingSkills),
+    matchScore: finalScore,
+    matchExplanation,
+    matchedSkills: asPillLabelArray(obj.matchedSkills, 12),
+    missingSkills: asPillLabelArray(missingSkills, 10),
     bulletSuggestions: asStringArray(obj.bulletSuggestions),
     sectionSuggestions: asStringArray(obj.sectionSuggestions),
     atsKeywords: asStringArray(obj.atsKeywords),
+    atsMatched: asStringArray(obj.atsMatched),
+    requirementChecks,
+    interviewPrep,
   };
 }
 
@@ -287,7 +451,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const parsed = parseResumeJobBody(body);
+  const parsed = parseAnalyzeBody(body);
   if (!parsed.ok) {
     return NextResponse.json(
       { error: parsed.error },
@@ -295,32 +459,51 @@ export async function POST(request: Request) {
     );
   }
 
-  const mockMode = isMockAnalysisEnabled();
-
-  if (!mockMode && !OPENAI_API_KEY) {
+  if (!OPENAI_API_KEY) {
     return NextResponse.json(
       { error: "Missing OPENAI_API_KEY on the server" },
       { status: 503 },
     );
   }
 
-  if (mockMode) {
-    let preview = "";
-    try {
-      preview = await cleanResumeToPlainText(parsed.resume);
-    } catch {
-      preview = "";
-    }
-    if (preview.length < 20) {
-      const raw = parsed.resume;
-      if (raw.length > 0 && !raw.trimStart().toLowerCase().startsWith("data:")) {
-        preview = raw.slice(0, 200);
-      } else {
-        preview =
-          "(Mock mode — upload a text-based PDF/DOCX/TXT for a real preview; scans have no extractable text.)";
+  async function resolveJobDescription(): Promise<{
+    text: string;
+    jobLink: string | null;
+  }> {
+    if ("jobLink" in parsed && parsed.jobLink) {
+      try {
+        let text = await fetchJobDescriptionText(parsed.jobLink);
+        text = text.replace(/\s+/g, " ").trim();
+        if (text.length < 80) {
+          throw new Error(
+            `Job page returned too little text (${text.length} characters).`,
+          );
+        }
+        return {
+          text: text.slice(0, MAX_JOB_CHARS),
+          jobLink: parsed.jobLink,
+        };
+      } catch (e) {
+        const msg =
+          e instanceof Error ? e.message : "Could not fetch job posting from URL";
+        throw new Error(msg);
       }
     }
-    return NextResponse.json(mockAnalysisResponse(preview));
+    return {
+      text: (parsed as { jobPosting: string }).jobPosting,
+      jobLink: null,
+    };
+  }
+
+  let jobDescription: string;
+  let resolvedJobLink: string | null = null;
+  try {
+    const resolved = await resolveJobDescription();
+    jobDescription = resolved.text;
+    resolvedJobLink = resolved.jobLink;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Could not load job posting";
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
 
   const resumeText = await cleanResumeToPlainText(parsed.resume);
@@ -335,34 +518,22 @@ export async function POST(request: Request) {
     );
   }
 
-  let jobDescription: string;
   try {
-    jobDescription = await fetchJobDescriptionText(parsed.jobLink);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed to fetch job URL";
-    return NextResponse.json({ error: msg }, { status: 422 });
-  }
-
-  if (jobDescription.length < MIN_MEANINGFUL_CHARS) {
-    return NextResponse.json(
-      {
-        error:
-          "Could not extract enough text from the job page. The site may block automated access, or the URL may not be a public posting.",
-      },
-      { status: 422 },
-    );
-  }
-
-  try {
-    const result = await runAnalysisWithOpenAI({ resume: resumeText, jobDescription });
-    return NextResponse.json(result);
+    const result = await runAnalysisWithOpenAI({
+      resume: resumeText,
+      jobDescription,
+    });
+    return NextResponse.json({
+      ...result,
+      resolvedJobPosting: jobDescription,
+      jobLink: resolvedJobLink,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Analysis failed";
     if (msg.includes("insufficient_quota") || msg.includes("billing")) {
       return NextResponse.json(
         {
-          error:
-            "OpenAI quota or billing issue. Add credits in your OpenAI account, or set USE_MOCK_ANALYSIS=true in .env.local to test without the API.",
+          error: "OpenAI quota or billing issue. Add credits in your OpenAI account.",
         },
         { status: 402 },
       );

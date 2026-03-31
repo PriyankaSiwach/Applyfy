@@ -1,353 +1,230 @@
-"use client";
+import Link from "next/link";
 
-import { ChangeEvent, FormEvent, useRef, useState } from "react";
-import { jsPDF } from "jspdf";
-
-type Analysis = {
-  matchScore: number;
-  matchedSkills: string[];
-  missingSkills: string[];
-  bulletSuggestions: string[];
-  sectionSuggestions: string[];
-  atsKeywords: string[];
-};
-
-function readFileAsResumeString(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve(typeof reader.result === "string" ? reader.result : "");
-    };
-    reader.onerror = () => {
-      reject(reader.error ?? new Error("Failed to read file"));
-    };
-    const isPlainText =
-      file.type.startsWith("text/") ||
-      /\.(txt|md|csv)$/i.test(file.name);
-    if (isPlainText) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsDataURL(file);
-    }
-  });
+function IconMatch() {
+  return (
+    <svg className="h-5 w-5 text-[#4F8EF7]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+    </svg>
+  );
 }
 
-export default function Home() {
-  const [resume, setResume] = useState("");
-  const [jobLink, setJobLink] = useState("");
-  const [loadingAnalyze, setLoadingAnalyze] = useState(false);
-  const [loadingCoverLetter, setLoadingCoverLetter] = useState(false);
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
-  const [coverLetter, setCoverLetter] = useState<string | null>(null);
-  const [coverLetterError, setCoverLetterError] = useState<string | null>(
-    null,
-  );
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  async function handleAnalyze(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setLoadingAnalyze(true);
-    setAnalyzeError(null);
-    setAnalysis(null);
-    setCoverLetter(null);
-    setCoverLetterError(null);
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resume, jobLink }),
-      });
-      const raw = await res.text();
-      let data: Analysis & { error?: string };
-      try {
-        data = JSON.parse(raw) as Analysis & { error?: string };
-      } catch {
-        throw new Error(raw || res.statusText);
-      }
-      if (!res.ok) {
-        throw new Error(data.error ?? res.statusText);
-      }
-      setAnalysis({
-        matchScore: data.matchScore,
-        matchedSkills: data.matchedSkills ?? [],
-        missingSkills: data.missingSkills ?? [],
-        bulletSuggestions: data.bulletSuggestions ?? [],
-        sectionSuggestions: data.sectionSuggestions ?? [],
-        atsKeywords: data.atsKeywords ?? [],
-      });
-    } catch (err) {
-      setAnalyzeError(
-        err instanceof Error ? err.message : "Something went wrong.",
-      );
-    } finally {
-      setLoadingAnalyze(false);
-    }
-  }
-
-  async function handleCoverLetterClick() {
-    setLoadingCoverLetter(true);
-    setCoverLetter(null);
-    setCoverLetterError(null);
-    try {
-      const res = await fetch("/api/cover-letter", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resume, jobLink }),
-      });
-      const raw = await res.text();
-      let data: { letter?: string; error?: string };
-      try {
-        data = JSON.parse(raw) as { letter?: string; error?: string };
-      } catch {
-        throw new Error(raw || res.statusText);
-      }
-      if (!res.ok) {
-        throw new Error(data.error ?? res.statusText);
-      }
-      setCoverLetter(data.letter ?? "");
-    } catch (err) {
-      setCoverLetterError(
-        err instanceof Error ? err.message : "Something went wrong.",
-      );
-    } finally {
-      setLoadingCoverLetter(false);
-    }
-  }
-
-  function handleUploadClick() {
-    fileInputRef.current?.click();
-  }
-
-  async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    try {
-      const text = await readFileAsResumeString(file);
-      setResume(text);
-    } catch {
-      setResume("");
-    }
-  }
-
-  function handleDownloadPdf() {
-    if (!coverLetter || loadingCoverLetter) return;
-    const doc = new jsPDF();
-    const margin = 14;
-    const maxWidth = 180;
-    const lineHeight = 7;
-    const lines = doc.splitTextToSize(coverLetter, maxWidth);
-    const pageHeight = doc.internal.pageSize.getHeight();
-    let y = margin + 6;
-    for (const line of lines) {
-      if (y > pageHeight - margin) {
-        doc.addPage();
-        y = margin + 6;
-      }
-      doc.text(line, margin, y);
-      y += lineHeight;
-    }
-    doc.save("cover-letter.pdf");
-  }
-
+function IconGap() {
   return (
-    <div className="flex min-h-full flex-1 flex-col items-center justify-center bg-zinc-50 px-4 py-16 dark:bg-zinc-950">
-      <div className="w-full max-w-2xl text-center">
-        <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Applyfy
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Upload your resume and a job link to analyze fit, then generate a cover
-          letter.
-        </p>
+    <svg className="h-5 w-5 text-[#22A05B]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+    </svg>
+  );
+}
 
-        <form
-          onSubmit={handleAnalyze}
-          className="mt-10 flex w-full max-w-lg mx-auto flex-col items-stretch gap-6 text-left"
-        >
-          <div>
-            <p className="mb-2 block text-center text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              Resume
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".txt,.md,.pdf,.doc,.docx,text/plain,application/pdf"
-              className="sr-only"
-              onChange={handleFileChange}
-            />
-            <div className="flex flex-col items-center gap-2">
-              <button
-                type="button"
-                onClick={handleUploadClick}
-                className="rounded-full border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-900 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Upload resume
-              </button>
-              {resume ? (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  File loaded — ready to analyze
-                </p>
-              ) : (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  No file selected yet
-                </p>
-              )}
-            </div>
-          </div>
+function IconLetter() {
+  return (
+    <svg className="h-5 w-5 text-[#D97706]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+    </svg>
+  );
+}
 
-          <div>
-            <label
-              htmlFor="job-link"
-              className="mb-2 block text-center text-sm font-medium text-zinc-700 dark:text-zinc-300"
-            >
-              Job Link
-            </label>
-            <input
-              id="job-link"
-              name="jobLink"
-              type="url"
-              inputMode="url"
-              value={jobLink}
-              onChange={(e) => setJobLink(e.target.value)}
-              placeholder="https://…"
-              className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 shadow-sm outline-none transition-[box-shadow,border-color] placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-100/10"
-            />
-          </div>
+function IconInterview() {
+  return (
+    <svg className="h-5 w-5 text-[#6366F1]" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+    </svg>
+  );
+}
 
-          <div className="flex flex-col items-center gap-3 pt-1">
-            <button
-              type="submit"
-              disabled={loadingAnalyze}
-              className="rounded-full bg-zinc-900 px-8 py-3 text-sm font-medium text-white shadow-sm transition-colors hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 dark:focus-visible:outline-zinc-100"
-            >
-              Generate
-            </button>
-            {loadingAnalyze ? (
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Analyzing…
-              </p>
-            ) : null}
-          </div>
-        </form>
-
-        {analyzeError ? (
-          <p className="mt-8 text-sm text-red-600 dark:text-red-400">
-            {analyzeError}
+export default function HomePage() {
+  return (
+    <main className="bg-[#F8FAFC]">
+      {/* Hero */}
+      <section className="px-10 pb-14 pt-[72px]">
+        <div className="mx-auto max-w-[1200px] text-center">
+          <p
+            className="mx-auto inline-flex rounded-[99px] border border-[#C7D0E8] bg-[#EEF1F8] px-4 py-1.5 text-sm font-medium text-[#2E3E65]"
+          >
+            AI-powered job application suite
           </p>
-        ) : null}
-
-        {analysis && !loadingAnalyze ? (
-          <div className="mt-10 w-full text-left space-y-8">
-            <section>
-              <h2 className="mb-2 text-center text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                1. Match Score
-              </h2>
-              <p className="text-center text-3xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
-                {analysis.matchScore}%
-              </p>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                2. Matched Skills
-              </h2>
-              <ul className="list-disc pl-5 text-sm text-zinc-800 dark:text-zinc-200">
-                {analysis.matchedSkills.map((s, i) => (
-                  <li key={`m-${i}-${s}`}>{s}</li>
-                ))}
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                3. Missing Skills
-              </h2>
-              <ul className="list-disc pl-5 text-sm text-zinc-800 dark:text-zinc-200">
-                {analysis.missingSkills.map((s, i) => (
-                  <li key={`x-${i}-${s}`}>{s}</li>
-                ))}
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                4. Resume Bullet Improvements
-              </h2>
-              <ul className="list-disc pl-5 text-sm text-zinc-800 dark:text-zinc-200">
-                {analysis.bulletSuggestions.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                5. Sections to Improve
-              </h2>
-              <ul className="list-disc pl-5 text-sm text-zinc-800 dark:text-zinc-200">
-                {analysis.sectionSuggestions.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            </section>
-
-            <section>
-              <h2 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                6. ATS keywords to add
-              </h2>
-              <ul className="list-disc pl-5 text-sm text-zinc-800 dark:text-zinc-200">
-                {analysis.atsKeywords.map((s, i) => (
-                  <li key={`a-${i}-${s}`}>{s}</li>
-                ))}
-              </ul>
-            </section>
-
-            <div className="flex flex-col items-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={handleCoverLetterClick}
-                disabled={loadingCoverLetter}
-                className="rounded-full bg-zinc-900 px-8 py-3 text-sm font-medium text-white shadow-sm transition-colors hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 dark:focus-visible:outline-zinc-100"
-              >
-                Generate Cover Letter
-              </button>
-              {loadingCoverLetter ? (
-                <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Generating cover letter…
-                </p>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {coverLetterError ? (
-          <p className="mt-8 text-sm text-red-600 dark:text-red-400">
-            {coverLetterError}
+          <h1 className="mt-6 text-[32px] font-bold leading-[1.15] tracking-[-0.5px] text-[#1A2A4A] sm:text-[40px]">
+            Apply{" "}
+            <span className="text-[#4F8EF7]">smarter.</span>
+            <br />
+            Land more interviews.
+          </h1>
+          <p className="mx-auto mt-5 max-w-[480px] text-base leading-relaxed text-[#64748B]">
+            Upload your resume and add a job listing URL. Get a match score, gap analysis, a tailored cover letter, and interview prep — in one flow.
           </p>
-        ) : null}
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4">
+            <Link
+              href="/my-application"
+              className="inline-flex rounded-lg bg-[#2E3E65] px-6 py-[11px] text-sm font-semibold text-white transition-colors hover:bg-[#3D5080]"
+            >
+              Start with your resume
+            </Link>
+            <a
+              href="#how-it-works"
+              className="inline-flex rounded-lg border-[1.5px] border-[#2E3E65] bg-white px-6 py-[11px] text-sm font-semibold text-[#2E3E65] transition-colors hover:bg-[#EEF1F8]"
+            >
+              See how it works
+            </a>
+          </div>
 
-        {coverLetter !== null && !loadingCoverLetter ? (
-          <div className="mt-10 w-full text-left">
-            <h2 className="mb-3 text-center text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              Cover letter
-            </h2>
-            <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm leading-relaxed whitespace-pre-wrap text-zinc-800 shadow-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
-              {coverLetter}
-            </div>
-            <div className="mt-4 flex justify-center">
-              <button
-                type="button"
-                onClick={handleDownloadPdf}
-                className="rounded-full border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-900 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Create cover letter PDF
-              </button>
+          <div className="mx-auto mt-12 max-w-[720px] border-t border-[#E2E8F0] pt-10">
+            <div className="flex flex-col items-center gap-8 sm:flex-row sm:justify-center sm:gap-8 md:gap-8">
+              <div className="text-center">
+                <p className="text-[22px] font-bold text-[#2E3E65]">2 min</p>
+                <p className="mt-1 text-xs text-[#64748B]">to full analysis</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[22px] font-bold text-[#2E3E65]">4-in-1</p>
+                <p className="mt-1 text-xs text-[#64748B]">tools in one flow</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[22px] font-bold text-[#2E3E65]">Free</p>
+                <p className="mt-1 text-xs text-[#64748B]">to get started</p>
+              </div>
             </div>
           </div>
-        ) : null}
-      </div>
-    </div>
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section id="how-it-works" className="bg-white px-10 py-14">
+        <div className="mx-auto max-w-[1200px]">
+          <p className="text-center text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4F8EF7]">
+            How it works
+          </p>
+          <h2 className="mt-2 text-center text-2xl font-bold text-[#1A2A4A]">
+            Three steps. One complete application.
+          </h2>
+          <div className="mt-12 grid grid-cols-1 gap-10 md:grid-cols-3 md:gap-8">
+            <div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2E3E65] text-[13px] font-bold text-white">
+                1
+              </div>
+              <h3 className="mt-4 text-sm font-semibold text-[#1A2A4A]">
+                Upload your resume + job link
+              </h3>
+              <p className="mt-2 text-[13px] leading-[1.55] text-[#64748B]">
+                PDF, Word, or text resume and the public URL to the role. We pull the posting for you.
+              </p>
+            </div>
+            <div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2E3E65] text-[13px] font-bold text-white">
+                2
+              </div>
+              <h3 className="mt-4 text-sm font-semibold text-[#1A2A4A]">
+                Get your match score and gaps
+              </h3>
+              <p className="mt-2 text-[13px] leading-[1.55] text-[#64748B]">
+                See exactly where you fit, what&apos;s missing, and which requirements you exceed.
+              </p>
+            </div>
+            <div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2E3E65] text-[13px] font-bold text-white">
+                3
+              </div>
+              <h3 className="mt-4 text-sm font-semibold text-[#1A2A4A]">
+                Generate and ship
+              </h3>
+              <p className="mt-2 text-[13px] leading-[1.55] text-[#64748B]">
+                One-click cover letter and interview prep cards tailored to that specific role.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="bg-[#F8FAFC] px-10 py-14">
+        <div className="mx-auto max-w-[1200px]">
+          <p className="text-center text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4F8EF7]">
+            What you get
+          </p>
+          <h2 className="mt-2 text-center text-2xl font-bold text-[#1A2A4A]">
+            Everything a hiring manager looks for.
+          </h2>
+          <div className="mt-12 grid grid-cols-1 gap-5 md:grid-cols-2">
+            <article className="rounded-r-xl rounded-l-none border border-[0.5px] border-[#E2E8F0] border-l-[3px] border-l-[#4F8EF7] bg-white p-5">
+              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#EBF2FF]">
+                <IconMatch />
+              </div>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-semibold text-[#1A2A4A]">
+                  Resume match score
+                </h3>
+                <span className="rounded-full bg-[#EEF1F8] px-2 py-0.5 text-xs font-medium text-[#2E3E65]">
+                  Core feature
+                </span>
+              </div>
+              <p className="text-[13px] leading-relaxed text-[#64748B]">
+                Instant % match against every requirement in the job posting. Know before you apply.
+              </p>
+            </article>
+            <article className="rounded-xl border border-[0.5px] border-[#E2E8F0] bg-white p-5">
+              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#E6F7EE]">
+                <IconGap />
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-[#1A2A4A]">
+                Gap analysis
+              </h3>
+              <p className="text-[13px] leading-relaxed text-[#64748B]">
+                Line-by-line breakdown of what you have, what&apos;s missing, and what you exceed.
+              </p>
+            </article>
+            <article className="rounded-xl border border-[0.5px] border-[#E2E8F0] bg-white p-5">
+              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#FEF3C7]">
+                <IconLetter />
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-[#1A2A4A]">
+                Cover letter generator
+              </h3>
+              <p className="text-[13px] leading-relaxed text-[#64748B]">
+                A tailored draft in seconds — tuned to the role, not a generic template.
+              </p>
+            </article>
+            <article className="rounded-xl border border-[0.5px] border-[#E2E8F0] bg-white p-5">
+              <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#EEEDFE]">
+                <IconInterview />
+              </div>
+              <h3 className="mb-2 text-sm font-semibold text-[#1A2A4A]">
+                Interview prep cards
+              </h3>
+              <p className="text-[13px] leading-relaxed text-[#64748B]">
+                Predicted questions with answer frameworks, based on the actual job description.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      {/* Quote */}
+      <section className="bg-[#2E3E65] px-10 py-12">
+        <blockquote className="mx-auto max-w-[520px] text-center">
+          <p className="text-lg font-medium italic leading-relaxed text-white">
+            &ldquo;I applied to 40 jobs in a month and got 3 interviews. With Applyfy I applied to 12 and got 5.&rdquo;
+          </p>
+          <footer className="mt-4 text-[13px] text-white/60">
+            — Early beta user, Software Engineer
+          </footer>
+        </blockquote>
+      </section>
+
+      {/* Final CTA */}
+      <section className="bg-[#F8FAFC] px-10 py-14">
+        <div className="mx-auto max-w-[1200px] text-center">
+          <h2 className="text-[26px] font-bold text-[#1A2A4A]">
+            Stop guessing. Start matching.
+          </h2>
+          <p className="mt-3 text-sm text-[#64748B]">
+            Your next interview is one good application.
+          </p>
+          <Link
+            href="/my-application"
+            className="mt-8 inline-flex rounded-lg bg-[#2E3E65] px-8 py-[13px] text-[15px] font-semibold text-white transition-colors hover:bg-[#3D5080]"
+          >
+            Start with your resume — it&apos;s free
+          </Link>
+        </div>
+      </section>
+    </main>
   );
 }
