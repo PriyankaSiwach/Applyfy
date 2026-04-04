@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const RESULTS_FROM_EMAIL =
   process.env.RESULTS_FROM_EMAIL ?? "Applyfy <no-reply@applyfy.app>";
@@ -98,6 +101,7 @@ export async function POST(req: Request) {
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
+    cache: "no-store",
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
       "Content-Type": "application/json",

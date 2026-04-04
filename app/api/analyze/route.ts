@@ -1,515 +1,375 @@
-import { NextResponse } from "next/server";
 import {
-  extractKeyRequirementsFromJob,
-  fetchJobDescriptionText,
+  fetchJobDescriptionFromUrlWithDetails,
+  JOB_FETCH_MIN_MEANINGFUL_CHARS,
+  JOB_PAGE_FETCH_TIMEOUT_MS,
+  JOB_PASTE_FALLBACK_USER_MESSAGE,
   MAX_JOB_CHARS,
 } from "@/lib/jobDescription";
-import type {
-  InterviewPrep,
-  InterviewRiskArea,
-  PredictedQuestion,
-  RequirementCheck,
-} from "@/lib/analysisTypes";
+import { jsonNoStore } from "@/lib/jsonResponseNoStore";
 import { parseAnalyzeBody } from "@/lib/parseAnalyzeBody";
+import { resumeTextFingerprint } from "@/lib/resumeFingerprint";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+/** Vercel / Next.js: allow long OpenAI + scrape (see vercel.json too). */
+export const maxDuration = 60;
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o";
+const OPENAI_MODEL = "gpt-4o-mini";
+/** Abort OpenAI request after this many ms (matches maxDuration budget). */
+const OPENAI_FETCH_TIMEOUT_MS = 60_000;
 
-function shortenSkillLabel(text: string, max = 100): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  if (t.length <= max) return t;
-  return `${t.slice(0, max - 1)}…`;
-}
-
-const MAX_RESUME_CHARS = 24_000;
+/** Trim prompt size for smaller / faster models (character caps, not tokens). */
+const ANALYZE_MAX_RESUME_CHARS = 12_000;
+const ANALYZE_MAX_JOB_CHARS = 10_000;
 const MIN_MEANINGFUL_CHARS = 80;
 
-const ANALYSIS_JSON_SCHEMA = `Return a single JSON object with exactly these keys (no markdown, no prose outside JSON):
-{
-  "matchScore": <integer 0-100, realistic based on overlap and must-have gaps>,
-  "matchExplanation": <string[] — exactly 3 bullets; each explains WHY the score; cite specific job requirements and resume evidence>,
-  "matchedSkills": <string[] — 6-12 pill-friendly labels, each 1-4 words (examples: "React", "API Design", "System Design"); no punctuation-heavy phrases, no full sentences, no evidence text>,
-  "missingSkills": <string[] — 4-10 pill-friendly labels, each 1-4 words representing missing/weak requirements; no full sentences>,
-  "bulletSuggestions": <string[] — 4-6 FAANG-caliber resume bullets: strong verbs, metrics where plausible, scoped to THIS job; not generic filler>,
-  "sectionSuggestions": <string[] — 4-6 concrete section-level fixes (Summary, Experience order, Projects, etc.) referencing this JD>,
-  "atsMatched": <string[] — 4-12 short keyword phrases from the JD that ARE clearly evidenced on the resume (for ATS “matched” display)>,
-  "atsKeywords": <string[] — 6-10 missing or underused keywords/phrases from the JD to add for ATS; short phrases only>,
-  "requirementChecks": <array of 8 to 12 objects, each exactly: { "skill": string (short requirement label), "present": boolean, "evidence": string (quote or paraphrase from resume if present; say what's missing if false) }> — extract ONLY skills, responsibilities, and qualifications from the job text; omit salary, benefits-only lines, legal/EEO/privacy boilerplate, and irrelevant fluff>,
-  "interviewPrep": {
-    "intro": <string>,
-    "behavioral": <array of 3 to 4 objects: { "question": string, "context": string, "fullAnswer": string, "tip": string }>,
-    "technical": <array of 3 to 4 objects: { "question": string, "context": string, "fullAnswer": string, "tip": string }>,
-    "starStories": <array of exactly 2 objects: { "title": string, "S": string, "T": string, "A": string, "R": string }>,
-    "redFlags": <array of exactly 2 objects: { "issue": string, "howToFrame": string }>
+function summarizeOpenAIResult(result: Record<string, unknown>) {
+  const kw = result.keywords;
+  const kArr = Array.isArray(kw) ? kw : [];
+  let kwEmptyEvidence = 0;
+  for (const row of kArr) {
+    if (typeof row !== "object" || row === null) {
+      kwEmptyEvidence += 1;
+      continue;
+    }
+    const ev = (row as { evidence?: unknown }).evidence;
+    if (typeof ev !== "string" || !ev.trim()) kwEmptyEvidence += 1;
   }
-}`;
+  return {
+    nKeywords: kArr.length,
+    kwEmptyEvidence,
+    nStrengths: Array.isArray(result.matchedStrengths)
+      ? result.matchedStrengths.length
+      : -1,
+    nGaps: Array.isArray(result.gaps) ? result.gaps.length : -1,
+    nRewrites: Array.isArray(result.rewrites) ? result.rewrites.length : -1,
+    nQuickWins: Array.isArray(result.quickWins) ? result.quickWins.length : -1,
+    hasAts: typeof result.atsScore === "number",
+    hasExp: typeof result.experienceMatch === "number",
+    hasEdu: typeof result.educationMatch === "number",
+  };
+}
 
-function extractJsonObject(content: string): Record<string, unknown> {
+const ANALYZE_SYSTEM = `You are a brutally honest ATS expert and resume writer with 15 years of FAANG recruiting experience. Analyze this resume against this job posting.
+
+Resume: {resumeText}
+Job Posting: {jobText}
+
+Return JSON with exactly these keys:
+
+'keywords': array of 12 objects {skill, found, evidence}
+- Extract the most critical skills from the job (short labels only, 1-3 words)
+- found: true only if clearly demonstrated in resume, not just listed as a keyword
+- evidence: exactly ONE sentence for the requirements table "Your resume" column for THIS row only. Must be unique across all 12 rows — never reuse the same wording.
+  - If found is true: cite concrete proof from the resume (project name, metric, company/role, or bullet) that shows this requirement.
+  - If found is false: name the closest thing on the resume toward this requirement, OR one honest sentence on why the resume falls short for this specific skill — still tied to this resume, not generic advice.
+- Forbidden: vague boilerplate, repeated phrases across rows, or the exact text "Not clearly demonstrated in the resume text" (or close paraphrases of that phrase).
+
+'matchedStrengths': array of 4 strings
+- Each string MUST follow this format exactly (use em dashes — as separators, three parts only):
+  "[Skill] — [specific project or experience from the resume that proves it] — [why this is relevant to this specific job posting]"
+- Example: "AWS serverless — Built a zero-cost URL shortener using Lambda, API Gateway, and DynamoDB — directly matches the job's emphasis on scalable cloud infrastructure"
+- Never output a skill name alone; every line must name a concrete resume item (project, role, metric, or bullet) AND tie relevance to a specific requirement or theme from the job posting text.
+
+'gaps': array of 5-6 objects {skill, reality, fix}
+- skill: the missing requirement
+- reality: one honest sentence on what the resume currently shows for this skill (never say 'no mention' — find the closest thing)
+- fix: one sentence on how to address it using what already exists in the resume
+
+'rewrites': array of 6 objects {
+  original, rewritten, section, whyBetter}
+- Find 6 existing bullet points or lines from the resume that can be improved
+- original: the exact current text from resume
+- rewritten: stronger version of the SAME experience — do NOT invent new experiences, do NOT add new job roles, do NOT fabricate skills. Only paraphrase and strengthen what is already there. Add metrics if implied. Weave in ATS keywords naturally where they genuinely fit the existing experience.
+- section: where this line currently lives in the resume (e.g. 'MoMA Experience', 'AWS Project', 'Skills section')
+- whyBetter: one sentence explaining what the rewrite improves
+
+'atsScore': integer 0-100
+- Score only the keyword and phrasing alignment of the resume as-is against the job posting
+- Separate from match score — this is purely about language and ATS optimization
+- Also used in the UI as "Keywords alignment" in the match breakdown
+
+'experienceMatch': integer 0-100
+- Alignment of years of experience, seniority, and relevance of past roles vs this posting's expectations
+
+'educationMatch': integer 0-100
+- How well degrees, fields of study, and certifications match what the job asks for (including reasonable equivalents)
+
+'quickWins': array of 3 strings
+- The 3 fastest changes the user can make right now that will have the biggest impact
+- Each must be specific and actionable in under 5 minutes
+
+'intro': string
+- A single 30-second interview self-introduction the candidate can read aloud. Natural spoken English.
+
+'starStories': array of exactly 4 objects { title, S, T, A, R }
+- Four distinct STAR stories from specific roles, projects, or accomplishments on the resume (not generic advice).
+- Fill in every S, T, A, R field with specific real content from the resume. Never leave any field as a generic instruction or template. T = the specific goal of that project/role. A = specific actions the candidate took. R = the specific outcome or metric achieved.
+
+Return only valid JSON. No markdown.
+
+CRITICAL FORMATTING RULES:
+- intro must be maximum 5 sentences total. It should take exactly 25-35 seconds to read aloud. Do not use paragraph breaks. Write it as one flowing paragraph.
+
+- Every fullAnswer must be written as a complete natural paragraph the candidate can actually say or adapt. No dashes or structured data patterns. Write it as if coaching someone on exactly what to say, in first person. Each should be about six to seven sentences and sound natural when read aloud.
+
+- Bad format (for fullAnswer only): 'Java — built X — shows Y' as a stub; use full natural paragraphs instead.
+- Good format (for fullAnswer): 'In my project work, I built X using Java which directly demonstrates Y'
+
+All text fields must read like a human wrote them for a human to speak aloud, except matchedStrengths which must use the exact three-part em-dash structure defined above.`;
+
+function extractJsonObject(
+  content: string,
+  logLabel: string,
+): Record<string, unknown> {
   const trimmed = content.trim();
   const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   let jsonStr = fence ? fence[1].trim() : trimmed;
-  try {
-    const parsed = JSON.parse(jsonStr) as unknown;
-    if (typeof parsed === "object" && parsed !== null) {
-      return parsed as Record<string, unknown>;
+
+  const tryParse = (s: string, phase: string): Record<string, unknown> | null => {
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (typeof parsed === "object" && parsed !== null) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch (e) {
+      console.error(`[${logLabel}] JSON.parse failed (${phase})`, {
+        error: e instanceof Error ? e.message : String(e),
+        preview: s.slice(0, 2500),
+      });
     }
-  } catch {
-    /* try fallback */
-  }
+    return null;
+  };
+
+  const first = tryParse(jsonStr, "primary");
+  if (first) return first;
+
   const start = jsonStr.indexOf("{");
   const end = jsonStr.lastIndexOf("}");
   if (start >= 0 && end > start) {
     jsonStr = jsonStr.slice(start, end + 1);
-    const parsed = JSON.parse(jsonStr) as unknown;
-    if (typeof parsed === "object" && parsed !== null) {
-      return parsed as Record<string, unknown>;
-    }
+    const bracket = tryParse(jsonStr, "bracket-slice");
+    if (bracket) return bracket;
   }
+
+  console.error(`[${logLabel}] Could not parse model JSON`, {
+    rawPreview: content.slice(0, 4000),
+    rawLength: content.length,
+  });
   throw new Error("Could not parse JSON from model response");
 }
 
-function asStringArray(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  return v.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
-}
-
-function toPillLabel(text: string): string {
-  const cleaned = text
-    .replace(/[–—:;,.(){}[\]|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const words = cleaned.split(" ").filter(Boolean).slice(0, 4);
-  return words.join(" ");
-}
-
-function asPillLabelArray(v: unknown, maxItems = 12): string[] {
-  if (!Array.isArray(v)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of v) {
-    if (typeof raw !== "string") continue;
-    const label = toPillLabel(raw);
-    if (!label) continue;
-    const key = label.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(label);
-    if (out.length >= maxItems) break;
-  }
-  return out;
-}
-
-function asScore(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  if (!Number.isFinite(n)) return 0;
-  return Math.min(100, Math.max(0, Math.round(n)));
-}
-
-function asRequirementChecks(v: unknown): RequirementCheck[] {
-  if (!Array.isArray(v)) return [];
-  const out: RequirementCheck[] = [];
-  for (const item of v) {
-    if (typeof item !== "object" || item === null) continue;
-    const o = item as Record<string, unknown>;
-    const skill = typeof o.skill === "string" ? o.skill.trim() : "";
-    const evidence = typeof o.evidence === "string" ? o.evidence.trim() : "";
-    const present = o.present === true;
-    if (!skill) continue;
-    out.push({
-      skill: shortenSkillLabel(skill, 120),
-      present,
-      evidence:
-        evidence ||
-        (present
-          ? "Supported by resume content."
-          : "Not clearly evidenced in resume."),
-    });
-  }
-  return out.slice(0, 12);
-}
-
-function asRiskAreas(v: unknown): InterviewRiskArea[] {
-  if (!Array.isArray(v)) return [];
-  const out: InterviewRiskArea[] = [];
-  for (const item of v) {
-    if (typeof item !== "object" || item === null) continue;
-    const o = item as Record<string, unknown>;
-    const gap = typeof o.gap === "string" ? o.gap.trim() : "";
-    let script = typeof o.script === "string" ? o.script.trim() : "";
-    if (!script && typeof o.howToExplain === "string") {
-      script = o.howToExplain.trim();
-    }
-    if (gap && script) out.push({ gap, script });
-  }
-  return out.slice(0, 6);
-}
-
-function asPredictedQuestionsRaw(v: unknown): PredictedQuestion[] {
-  if (!Array.isArray(v)) return [];
-  const out: PredictedQuestion[] = [];
-  for (const item of v) {
-    if (typeof item !== "object" || item === null) continue;
-    const o = item as Record<string, unknown>;
-    const question = typeof o.question === "string" ? o.question.trim() : "";
-    const context = typeof o.context === "string" ? o.context.trim() : "";
-    const fullAnswer =
-      typeof o.fullAnswer === "string" ? o.fullAnswer.trim() : "";
-    const tip = typeof o.tip === "string" ? o.tip.trim() : "";
-    const kind: PredictedQuestion["kind"] =
-      o.kind === "technical" ? "technical" : "behavioral";
-    if (question && context && fullAnswer && tip) {
-      out.push({ question, context, fullAnswer, tip, kind });
-    }
-  }
-  return out.slice(0, 12);
-}
-
-function normalizeInterviewPrep(
-  raw: unknown,
-): InterviewPrep {
-  let introPitch = "";
-  let behavioral: PredictedQuestion[] = [];
-  let technical: PredictedQuestion[] = [];
-  let starStories: {
-    title: string;
-    S: string;
-    T: string;
-    A: string;
-    R: string;
-  }[] = [];
-  let redFlags: InterviewRiskArea[] = [];
-
-  if (typeof raw === "object" && raw !== null) {
-    const o = raw as Record<string, unknown>;
-    introPitch =
-      typeof o.intro === "string"
-        ? o.intro.trim()
-        : typeof o.introPitch === "string"
-          ? o.introPitch.trim()
-          : "";
-    behavioral = asPredictedQuestionsRaw(o.behavioral).map((q) => ({
-      ...q,
-      kind: "behavioral" as const,
-    }));
-    technical = asPredictedQuestionsRaw(o.technical).map((q) => ({
-      ...q,
-      kind: "technical" as const,
-    }));
-    if (Array.isArray(o.starStories)) {
-      starStories = o.starStories
-        .filter(
-          (s): s is { title: string; S: string; T: string; A: string; R: string } =>
-            typeof s === "object" &&
-            s !== null &&
-            typeof (s as { title?: unknown }).title === "string" &&
-            typeof (s as { S?: unknown }).S === "string" &&
-            typeof (s as { T?: unknown }).T === "string" &&
-            typeof (s as { A?: unknown }).A === "string" &&
-            typeof (s as { R?: unknown }).R === "string",
-        )
-        .map((s) => ({
-          title: s.title.trim(),
-          S: s.S.trim(),
-          T: s.T.trim(),
-          A: s.A.trim(),
-          R: s.R.trim(),
-        }))
-        .slice(0, 2);
-    }
-    if (Array.isArray(o.redFlags)) {
-      redFlags = o.redFlags
-        .filter(
-          (r): r is { issue: string; howToFrame: string } =>
-            typeof r === "object" &&
-            r !== null &&
-            typeof (r as { issue?: unknown }).issue === "string" &&
-            typeof (r as { howToFrame?: unknown }).howToFrame === "string",
-        )
-        .map((r) => ({
-          gap: r.issue.trim(),
-          script: r.howToFrame.trim(),
-        }))
-        .slice(0, 2);
-    }
-  }
-
-  behavioral = behavioral.slice(0, 4);
-  technical = technical.slice(0, 4);
-  const predictedQuestions = [...behavioral, ...technical].slice(0, 8);
-  const likelyQuestions = predictedQuestions.map((q) => q.question);
-  const keyStories = starStories.map(
-    (s) => `${s.title}: S) ${s.S} T) ${s.T} A) ${s.A} R) ${s.R}`,
-  );
-
-  return {
-    introPitch,
-    behavioral,
-    technical,
-    redFlags,
-    starStories,
-    likelyQuestions,
-    keyStories,
-    riskAreas: redFlags,
-    predictedQuestions,
-  };
-}
-
-async function runAnalysisWithOpenAI({
+async function runAnalyzeOpenAI({
   resume,
   jobDescription,
 }: {
   resume: string;
   jobDescription: string;
 }) {
-  const system = `You are a senior technical recruiter and resume strategist with 15 years of experience at top tech companies.
+  const resumeSlice = resume.slice(0, ANALYZE_MAX_RESUME_CHARS);
+  const jobSlice = jobDescription.slice(0, ANALYZE_MAX_JOB_CHARS);
+  const userContent = ANALYZE_SYSTEM.replace(
+    "{resumeText}",
+    resumeSlice,
+  ).replace("{jobText}", jobSlice);
 
-ANALYZE PROMPT:
-You are a senior technical recruiter and resume strategist with 15 years of experience at top tech companies. Analyze this resume against this job posting with brutal honesty and precision.
+  let completion: Response;
+  try {
+    completion = await fetch(OPENAI_API_URL, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(OPENAI_FETCH_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: userContent }],
+        max_tokens: 8192,
+        temperature: 0.4,
+      }),
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      console.error("[/api/analyze] OpenAI fetch timed out", {
+        timeoutMs: OPENAI_FETCH_TIMEOUT_MS,
+      });
+      throw new Error(
+        `OpenAI request timed out after ${OPENAI_FETCH_TIMEOUT_MS / 1000}s`,
+      );
+    }
+    console.error("[/api/analyze] OpenAI fetch failed", e);
+    throw e;
+  }
 
-Resume: {resumeText}
-Job Posting: {jobText}
+  const rawCompletionText = await completion.text();
+  if (!completion.ok) {
+    console.error("[/api/analyze] OpenAI HTTP error", {
+      status: completion.status,
+      bodyPreview: rawCompletionText.slice(0, 2000),
+    });
+    throw new Error(`OpenAI error: ${rawCompletionText.slice(0, 500)}`);
+  }
 
-Return a JSON object with exactly these keys:
+  let apiData: unknown;
+  try {
+    apiData = JSON.parse(rawCompletionText) as unknown;
+  } catch (e) {
+    console.error("[/api/analyze] OpenAI response body is not valid JSON", {
+      error: e instanceof Error ? e.message : String(e),
+      preview: rawCompletionText.slice(0, 2500),
+    });
+    throw new Error("Invalid JSON in OpenAI API response body");
+  }
 
-"keywords": array of 12 objects {skill, found}
-- Extract the most critical technical and soft skills from the job posting
-- found: true if clearly evidenced in resume, false if absent
-- Short names only: "React", "Docker", "Team leadership"
-- Order by importance to the role
+  const wrapped = apiData as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = wrapped.choices?.[0]?.message?.content ?? "";
 
-"strengths": array of exactly 4 strings
-- Each must name a SPECIFIC skill or experience from THIS resume that matches THIS job
-- Format: "[Skill] — [what the resume shows] — [why it matters for this role]"
-- Example: "React expertise — 3 projects using React with measurable outcomes — directly matches the posting's emphasis on frontend ownership"
-- Never generic. Never repeat the same structure twice.
-
-"gaps": array of exactly 3 strings
-- Real gaps between THIS resume and THIS job only
-- Format: "[Missing area] — [what the job requires] — [how to address it in 1 line]"
-- Be specific and actionable, not discouraging
-
-"bullets": array of 3 improved resume bullet strings
-- Rewrite weak bullets from the resume to be stronger for THIS specific role
-- Use metrics where possible
-- Start each with a strong action verb
-- Tailor language to match the job posting's vocabulary
-
-MATCH PROMPT:
-You are an ATS system and senior hiring manager combined. Score this candidate with precision.
-
-Resume: {resumeText}
-Job Posting: {jobText}
-
-Return a JSON object with exactly these keys:
-
-"score": integer between 0-100
-- Calculate genuinely based on: skills overlap (40%), experience level fit (30%), domain knowledge match (20%), culture/soft skills fit (10%)
-- Be honest — a junior resume against a senior role should score 40-55, not 70+
-- Never return the same score twice unless the inputs are identical
-
-"matched": array of 4 short skill labels (1-3 words each)
-- Only skills CLEARLY present in both resume and job posting
-
-"missing": array of 3 short skill labels (1-3 words each)
-- Only the most critical gaps that would concern a recruiter
-
-"scoreLabel": one of "Needs work", "Partial fit", "Good fit", "Strong match" based on score range
-
-"reasons": array of exactly 3 strings
-- Honest, specific explanations for why the score is what it is
-- Reference actual content from both documents
-- No filler sentences
-
-INTERVIEW PREP PROMPT:
-You are a senior hiring manager and interview coach. Generate deeply personalized interview prep for this exact candidate and role.
-
-Resume: {resumeText}
-Job Posting: {jobText}
-
-Return JSON with these keys:
-
-'intro': A confident 5-6 sentence spoken introduction.
-- Sentence 1: Name + degree/background + top 2 skills relevant to THIS job
-- Sentence 2: Reference a SPECIFIC project from the resume with a real result or metric
-- Sentence 3: Connect that experience to what THIS job needs
-- Sentence 4: Why THIS company specifically excites them
-- Sound natural, warm, and confident — not robotic
-- Max 150 words
-
-'behavioral': array of 4 objects {question, context, fullAnswer, tip}
-- question: specific to THIS job posting's responsibilities
-- context: one sentence on why interviewers ask this
-- fullAnswer: a complete 4-5 sentence model answer written in first person using ACTUAL projects/experience from the resume. Include a metric or outcome. End with a lesson learned.
-- tip: one tactical sentence on delivery
-
-'technical': array of 4 objects {question, context, fullAnswer, tip}
-- question: tests a skill explicitly listed in THIS job
-- context: what the interviewer is really evaluating
-- fullAnswer: a complete answer that walks through the concept AND ties it to something in the candidate's resume. 4-5 sentences.
-- tip: what to emphasize or avoid
-
-'starStories': array of 2 objects {title, S, T, A, R}
-- Built from REAL experiences in the resume
-- Each field is 2 sentences minimum
-- R must include a specific outcome or metric
-
-'redFlags': array of 2 objects {issue, howToFrame}
-- issue: a real weakness this resume has for this role
-- howToFrame: a complete 2-3 sentence script the candidate can actually say in the interview
-
-Return only valid JSON. No markdown, no explanation text outside the JSON.
-
-Now transform these outputs into this required API schema exactly:
-${ANALYSIS_JSON_SCHEMA}`;
-
-  const user = `resumeText:
-${resume.slice(0, MAX_RESUME_CHARS)}
-
-jobText:
-${jobDescription.slice(0, MAX_JOB_CHARS)}`;
-
-  const completion = await fetch(OPENAI_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      max_tokens: 6144,
-      temperature: 0.35,
-    }),
+  console.log("[/api/analyze] OpenAI assistant message", {
+    contentLength: content.length,
+    contentPreview: content.slice(0, 500),
+    resumeCharsUsed: resumeSlice.length,
+    jobCharsUsed: jobSlice.length,
   });
 
-  if (!completion.ok) {
-    const err = await completion.text();
-    throw new Error(`OpenAI error: ${err}`);
-  }
+  const obj = extractJsonObject(content, "/api/analyze");
 
-  const data = (await completion.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const obj = extractJsonObject(content);
-
-  const finalScore = asScore(obj.matchScore);
-
-  const requirementChecks = asRequirementChecks(obj.requirementChecks);
-  if (requirementChecks.length < 8) {
-    throw new Error("Analysis response incomplete: requirement checks missing.");
-  }
-
-  const matchExplanation = asStringArray(obj.matchExplanation).slice(0, 3);
-  if (matchExplanation.length < 3) {
-    throw new Error("Analysis response incomplete: match explanation missing.");
-  }
-
-  const missingSkills = asStringArray(obj.missingSkills);
-  if (missingSkills.length === 0) {
-    throw new Error("Analysis response incomplete: missing skills missing.");
-  }
-
-  const interviewPrep = normalizeInterviewPrep(obj.interviewPrep);
-  if (
-    !interviewPrep.introPitch ||
-    interviewPrep.behavioral.length < 3 ||
-    interviewPrep.technical.length < 3 ||
-    interviewPrep.starStories.length < 2 ||
-    interviewPrep.redFlags.length < 2
-  ) {
-    throw new Error("Analysis response incomplete: interview prep missing.");
-  }
+  console.log("[/api/analyze] Parsed model JSON", {
+    keys: Object.keys(obj).sort(),
+    ...summarizeOpenAIResult(obj),
+  });
 
   return {
-    matchScore: finalScore,
-    matchExplanation,
-    matchedSkills: asPillLabelArray(obj.matchedSkills, 12),
-    missingSkills: asPillLabelArray(missingSkills, 10),
-    bulletSuggestions: asStringArray(obj.bulletSuggestions),
-    sectionSuggestions: asStringArray(obj.sectionSuggestions),
-    atsKeywords: asStringArray(obj.atsKeywords),
-    atsMatched: asStringArray(obj.atsMatched),
-    requirementChecks,
-    interviewPrep,
+    keywords: obj.keywords,
+    matchedStrengths: obj.matchedStrengths,
+    gaps: obj.gaps,
+    rewrites: obj.rewrites,
+    atsScore: obj.atsScore,
+    experienceMatch: obj.experienceMatch,
+    educationMatch: obj.educationMatch,
+    quickWins: obj.quickWins,
+    intro: obj.intro,
+    starStories: obj.starStories,
   };
 }
 
 export async function POST(request: Request) {
+  const routePath = new URL(request.url).pathname;
+
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return jsonNoStore({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const parsed = parseAnalyzeBody(body);
   if (!parsed.ok) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: parsed.error },
       { status: parsed.status },
     );
   }
+  const analyzeInput = parsed;
 
   if (!OPENAI_API_KEY) {
-    return NextResponse.json(
+    return jsonNoStore(
       { error: "Missing OPENAI_API_KEY on the server" },
       { status: 503 },
     );
   }
 
-  async function resolveJobDescription(): Promise<{
-    text: string;
+  type JobResolveOk = { ok: true; text: string; jobLink: string | null };
+  type JobResolvePaste = {
+    ok: false;
+    jobTextPasteRequired: true;
+    message: string;
     jobLink: string | null;
-  }> {
-    if ("jobLink" in parsed && parsed.jobLink) {
-      try {
-        let text = await fetchJobDescriptionText(parsed.jobLink);
-        text = text.replace(/\s+/g, " ").trim();
-        if (text.length < 80) {
-          throw new Error(
-            `Job page returned too little text (${text.length} characters).`,
-          );
-        }
-        return {
-          text: text.slice(0, MAX_JOB_CHARS),
-          jobLink: parsed.jobLink,
-        };
-      } catch (e) {
-        const msg =
-          e instanceof Error ? e.message : "Could not fetch job posting from URL";
-        throw new Error(msg);
-      }
+  };
+
+  async function resolveJobDescription(): Promise<JobResolveOk | JobResolvePaste> {
+    if (analyzeInput.job.kind === "text") {
+      const text = analyzeInput.job.text.replace(/\s+/g, " ").trim();
+      const jobLink = analyzeInput.job.urlContext ?? null;
+      return {
+        ok: true,
+        text: text.slice(0, MAX_JOB_CHARS),
+        jobLink,
+      };
+    }
+
+    const url = analyzeInput.job.url;
+    const scraped = await fetchJobDescriptionFromUrlWithDetails(
+      url,
+      JOB_PAGE_FETCH_TIMEOUT_MS,
+    );
+    if (!scraped.ok) {
+      return {
+        ok: false,
+        jobTextPasteRequired: true,
+        message: scraped.message,
+        jobLink: url,
+      };
+    }
+    const text = scraped.text.replace(/\s+/g, " ").trim();
+    if (text.length < JOB_FETCH_MIN_MEANINGFUL_CHARS) {
+      return {
+        ok: false,
+        jobTextPasteRequired: true,
+        message: JOB_PASTE_FALLBACK_USER_MESSAGE,
+        jobLink: url,
+      };
     }
     return {
-      text: (parsed as { jobPosting: string }).jobPosting,
-      jobLink: null,
+      ok: true,
+      text: text.slice(0, MAX_JOB_CHARS),
+      jobLink: url,
     };
   }
 
-  let jobDescription: string;
-  let resolvedJobLink: string | null = null;
-  try {
-    const resolved = await resolveJobDescription();
-    jobDescription = resolved.text;
-    resolvedJobLink = resolved.jobLink;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Could not load job posting";
-    return NextResponse.json({ error: msg }, { status: 400 });
+  const tJob0 = Date.now();
+  const resolved = await resolveJobDescription();
+  const msJobResolve = Date.now() - tJob0;
+  if (!resolved.ok) {
+    console.log("[/api/analyze] Job URL/text requires paste fallback", {
+      msJobResolve,
+      jobLink: resolved.jobLink,
+    });
+    return jsonNoStore(
+      {
+        jobTextPasteRequired: true,
+        jobTextPasteMessage: resolved.message,
+        jobLink: resolved.jobLink,
+      },
+      { status: 200 },
+    );
   }
 
-  const resumeText = await cleanResumeToPlainText(parsed.resume);
+  const jobDescription = resolved.text;
+  const resolvedJobLink = resolved.jobLink;
+
+  const tResume0 = Date.now();
+  const resumeText = await cleanResumeToPlainText(analyzeInput.resume);
+  const msResumeClean = Date.now() - tResume0;
+  const fp = resumeTextFingerprint(resumeText);
+  console.log(
+    `[${routePath}] resume fingerprint`,
+    JSON.stringify({
+      length: fp.length,
+      sha256Prefix: fp.sha256Prefix,
+    }),
+  );
 
   if (resumeText.length < MIN_MEANINGFUL_CHARS) {
-    return NextResponse.json(
+    return jsonNoStore(
       {
         error:
           "Could not extract enough readable text from your resume. Try: a .txt/.md file; a PDF with selectable text (not a scan); or .docx. Legacy .doc is not supported.",
@@ -519,25 +379,54 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await runAnalysisWithOpenAI({
+    const tAi0 = Date.now();
+    const result = await runAnalyzeOpenAI({
       resume: resumeText,
       jobDescription,
     });
-    return NextResponse.json({
+    const msOpenAI = Date.now() - tAi0;
+    console.log("[/api/analyze] Analyze pipeline timings (ms)", {
+      msJobResolve,
+      msResumeClean,
+      msOpenAI,
+      jobDescLen: jobDescription.length,
+      resumeLen: resumeText.length,
+      ...summarizeOpenAIResult(result),
+    });
+    return jsonNoStore({
       ...result,
       resolvedJobPosting: jobDescription,
       jobLink: resolvedJobLink,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Analysis failed";
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[/api/analyze] Analyze failed", {
+      msJobResolve,
+      msResumeClean,
+      error: msg,
+    });
     if (msg.includes("insufficient_quota") || msg.includes("billing")) {
-      return NextResponse.json(
+      return jsonNoStore(
         {
           error: "OpenAI quota or billing issue. Add credits in your OpenAI account.",
         },
         { status: 402 },
       );
     }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    if (msg.includes("timed out")) {
+      return jsonNoStore(
+        {
+          error:
+            "Analysis timed out. Try again with a shorter job description or paste the posting text instead of only a URL.",
+        },
+        { status: 504 },
+      );
+    }
+    return jsonNoStore(
+      {
+        error: "Analysis didn't complete. Try again in a moment.",
+      },
+      { status: 500 },
+    );
   }
 }

@@ -5,8 +5,8 @@ export type RequirementCheck = {
 };
 
 export type InterviewRiskArea = {
-  gap: string;
-  script: string;
+  issue: string;
+  howToFrame: string;
 };
 
 export type PredictedQuestion = {
@@ -26,6 +26,8 @@ export type StarStory = {
 };
 
 export type InterviewPrep = {
+  /** Raw API field; falls back to introPitch when absent. */
+  intro?: string;
   introPitch: string;
   behavioral: PredictedQuestion[];
   technical: PredictedQuestion[];
@@ -39,15 +41,44 @@ export type InterviewPrep = {
   predictedQuestions: PredictedQuestion[];
 };
 
+export type KeywordHit = {
+  skill: string;
+  found: boolean;
+  /** One sentence for the match requirements table; model-generated, resume-specific. */
+  evidence: string;
+};
+
+export type GapInsight = {
+  skill: string;
+  reality: string;
+  fix: string;
+};
+
+export type ResumeRewriteItem = {
+  original: string;
+  rewritten: string;
+  section: string;
+  whyBetter: string;
+};
+
+/** Result of POST /api/analyze (ATS-focused rewrite + gaps). */
 export type Analysis = {
+  atsScore: number;
+  quickWins: string[];
+  keywords: KeywordHit[];
+  matchedStrengths: string[];
+  resumeGaps: GapInsight[];
+  rewrites: ResumeRewriteItem[];
+  /** Composite of skills, experience, education, and ATS (average of four pillars). */
   matchScore: number;
+  skillsMatch: number;
+  experienceMatch: number;
+  educationMatch: number;
   matchExplanation: string[];
   matchedSkills: string[];
   missingSkills: string[];
-  bulletSuggestions: string[];
   sectionSuggestions: string[];
   atsKeywords: string[];
-  /** JD keywords evidenced on resume (green pills) */
   atsMatched: string[];
   requirementChecks: RequirementCheck[];
   interviewPrep: InterviewPrep;
@@ -89,7 +120,7 @@ function asStarStories(raw: unknown): StarStory[] {
     const R = typeof o.R === "string" ? o.R.trim() : "";
     if (title && S && T && A && R) out.push({ title, S, T, A, R });
   }
-  return out.slice(0, 2);
+  return out.slice(0, 4);
 }
 
 export function parseInterviewPrepFromApi(rawPrep: unknown): InterviewPrep {
@@ -121,13 +152,16 @@ export function parseInterviewPrepFromApi(rawPrep: unknown): InterviewPrep {
       )
     : [];
 
+  const introFromApi =
+    p && typeof p.intro === "string"
+      ? p.intro.trim()
+      : p && typeof p.introPitch === "string"
+        ? p.introPitch.trim()
+        : "";
+
   return {
-    introPitch:
-      p && typeof p.introPitch === "string"
-        ? p.introPitch
-        : p && typeof p.intro === "string"
-          ? p.intro
-          : "",
+    intro: p && typeof p.intro === "string" ? p.intro.trim() : undefined,
+    introPitch: introFromApi,
     behavioral,
     technical,
     starStories,
@@ -147,33 +181,48 @@ export function parseInterviewPrepFromApi(rawPrep: unknown): InterviewPrep {
           : [],
     redFlags: Array.isArray(p?.redFlags)
       ? (p.redFlags
-          .filter((r): r is { issue: string; howToFrame: string } => {
-            return (
-              typeof r === "object" &&
-              r !== null &&
-              typeof (r as { issue?: unknown }).issue === "string" &&
-              typeof (r as { howToFrame?: unknown }).howToFrame === "string"
-            );
+          .map((r) => {
+            if (typeof r !== "object" || r === null) return null;
+            const o = r as Record<string, unknown>;
+            const issue =
+              typeof o.issue === "string"
+                ? o.issue.trim()
+                : typeof o.gap === "string"
+                  ? o.gap.trim()
+                  : "";
+            const howToFrame =
+              typeof o.howToFrame === "string"
+                ? o.howToFrame.trim()
+                : typeof o.script === "string"
+                  ? o.script.trim()
+                  : "";
+            if (!issue || !howToFrame) return null;
+            return { issue, howToFrame };
           })
-          .map((r) => ({
-            gap: r.issue.trim(),
-            script: r.howToFrame.trim(),
-          }))
-          .slice(0, 2))
+          .filter((x): x is InterviewRiskArea => x !== null)
+          .slice(0, 8))
       : [],
     riskAreas: Array.isArray(p?.riskAreas)
       ? p.riskAreas
-          .filter(
-            (r): r is InterviewRiskArea =>
-              typeof r === "object" &&
-              r !== null &&
-              typeof (r as InterviewRiskArea).gap === "string" &&
-              typeof (r as InterviewRiskArea).script === "string",
-          )
-          .map((r) => ({
-            gap: r.gap.trim(),
-            script: r.script.trim(),
-          }))
+          .map((r) => {
+            if (typeof r !== "object" || r === null) return null;
+            const o = r as Record<string, unknown>;
+            const issue =
+              typeof o.issue === "string"
+                ? o.issue.trim()
+                : typeof o.gap === "string"
+                  ? o.gap.trim()
+                  : "";
+            const howToFrame =
+              typeof o.howToFrame === "string"
+                ? o.howToFrame.trim()
+                : typeof o.script === "string"
+                  ? o.script.trim()
+                  : "";
+            if (!issue || !howToFrame) return null;
+            return { issue, howToFrame };
+          })
+          .filter((x): x is InterviewRiskArea => x !== null)
       : [],
     predictedQuestions,
   };

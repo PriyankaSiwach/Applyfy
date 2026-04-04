@@ -1,29 +1,62 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --primary: #2e3e65;
-  --primary-hover: #3d5080;
-  --match: #22a05b;
-  --accent: #4f8ef7;
-  --app-bg: #f8fafc;
-  --card: #ffffff;
-  --border-muted: #e2e8f0;
-  --text-muted: #64748b;
+  --bg-base: #f8faff;
+  --bg-surface: #f0f4ff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f5f8ff;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(59, 91, 219, 0.3);
+  --text-primary: #0d1117;
+  --text-secondary: #4b5675;
+  --text-muted: #9aa3b8;
+  --brand: #3b5bdb;
+  --brand-2: #7c3aed;
+  --brand-glow: rgba(59, 91, 219, 0.15);
+  --green: #10b981;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --gradient-hero: linear-gradient(135deg, #3b5bdb 0%, #7c3aed 100%);
+
+  /* Legacy aliases (app routes) */
+  --foreground: var(--text-primary);
+  --app-bg: var(--bg-base);
+  --card: var(--bg-card);
+  --primary: var(--brand);
+  --primary-hover: var(--brand-2);
+}
+
+html.dark {
+  --bg-base: #0c0e1a;
+  --bg-surface: #11131f;
+  --bg-card: #161827;
+  --bg-card-hover: #1c1f33;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(124, 58, 237, 0.4);
+  --text-primary: #eef0f8;
+  --text-secondary: #8892b0;
+  --text-muted: #4b5675;
+  --brand: #6b8cff;
+  --brand-2: #a78bfa;
+  --brand-glow: rgba(107, 140, 255, 0.15);
+  --foreground: var(--text-primary);
+  --app-bg: var(--bg-base);
+  --card: var(--bg-card);
+  --primary: var(--brand);
+  --primary-hover: var(--brand-2);
 }
 
 @theme inline {
   --color-background: var(--app-bg);
   --color-foreground: var(--foreground);
-  --color-primary: #2e3e65;
-  --color-primary-hover: #3d5080;
-  --color-match: #22a05b;
-  --color-accent: #4f8ef7;
-  --color-app-bg: #f8fafc;
-  --color-card: #ffffff;
-  --color-border-muted: #e2e8f0;
-  --color-text-muted: #64748b;
+  --color-primary: #3b5bdb;
+  --color-primary-hover: #7c3aed;
+  --color-match: #10b981;
+  --color-accent: #0ea5e9;
+  --color-app-bg: var(--app-bg);
+  --color-card: var(--card);
+  --color-border-muted: var(--border);
+  --color-text-muted: var(--text-muted);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
 }
@@ -33,7 +66,615 @@ html {
 }
 
 body {
-  background-color: var(--app-bg);
-  color: var(--foreground);
+  background-color: var(--bg-base);
+  color: var(--text-primary);
   font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Landing / app shared */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.45;
+  }
+}
+
+.skeleton-shimmer-animate {
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes sim-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes step-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.2);
+    opacity: 0.12;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@keyframes home-hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes home-badge-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes home-scroll-dot {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(8px);
+  }
+}
+
+@keyframes home-badge-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes home-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(32px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes home-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-60px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes home-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(60px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-step-ring {
+  animation: step-ring 2s ease-out infinite;
+}
+
+.animate-section-in {
+  animation: fade-in-up 0.5s ease-out forwards;
+  opacity: 0;
+}
+
+.animate-pill-in {
+  animation: pill-in 0.4s ease-out forwards;
+  opacity: 0;
+}
+
+.home-hero-float {
+  animation: home-hero-float 3s ease-in-out infinite;
+}
+
+.home-section-reveal {
+  opacity: 0;
+}
+
+.home-section-reveal.is-visible {
+  animation: home-reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.home-stagger-item {
+  opacity: 0;
+  transform: translateY(32px);
+}
+
+.home-stagger-item.is-visible {
+  animation: home-reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.home-how-left.is-visible {
+  animation: home-slide-in-left 0.6s ease-out forwards;
+}
+
+.home-how-right.is-visible {
+  animation: home-slide-in-right 0.6s ease-out forwards;
+}
+
+.app-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  padding: 24px;
+}
+
+html.dark .app-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.cover-letter-editor::first-line {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+button:not(:disabled) {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Live Resume Editor */
+.resume-editor-hl {
+  background: rgba(245, 158, 11, 0.15);
+  text-decoration: underline wavy #f59e0b;
+  cursor: help;
+}
+
+.resume-editor-name {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 0.35em;
+}
+
+.resume-editor-header {
+  font-size: 15px;
+  font-weight: 700;
+  margin-top: 0.75em;
+  margin-bottom: 0.25em;
+}
+
+.resume-editor-bullet {
+  padding-left: 16px;
+}
+
+.resume-editor-pills-row {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.resume-editor-pills-row::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes resume-editor-enter-left {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes resume-editor-enter-right {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes resume-editor-spin-once {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes resume-editor-progress-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes resume-editor-pill-flash {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  }
+  40% {
+    transform: scale(1.08);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: none;
+  }
+}
+
+@keyframes resume-editor-score-pulse {
+  0% {
+    border-color: var(--brand);
+  }
+  100% {
+    border-color: var(--border);
+  }
+}
+
+.resume-editor-enter-left .resume-editor-enter-left-inner {
+  animation: resume-editor-enter-left 0.5s ease-out forwards;
+}
+
+.resume-editor-enter-right-delayed .resume-editor-enter-right-inner {
+  animation: resume-editor-enter-right 0.5s ease-out 0.1s forwards;
+  opacity: 0;
+  animation-fill-mode: forwards;
+}
+
+.resume-editor-spin-once {
+  animation: resume-editor-spin-once 0.4s ease-out;
+}
+
+.resume-editor-progress-pulse {
+  animation: resume-editor-progress-pulse 1s ease-in-out infinite;
+}
+
+.resume-editor-pill-flash {
+  animation: resume-editor-pill-flash 0.4s ease-out;
+}
+
+.resume-editor-score-pulse {
+  animation: resume-editor-score-pulse 0.3s ease-out;
+}
+
+.resume-editor-insert-flash {
+  animation: resume-editor-score-pulse 0.35s ease-out;
+}
+
+.resume-editor-apply-flash {
+  animation: resume-editor-pill-flash 0.45s ease-out;
+}
+
+.resume-editor-check-draw path {
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  animation: resume-check-draw 0.3s ease-out forwards;
+}
+
+@keyframes resume-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resume-editor-enter-left .resume-editor-enter-left-inner,
+  .resume-editor-enter-right-delayed .resume-editor-enter-right-inner {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .resume-editor-spin-once,
+  .resume-editor-progress-pulse,
+  .resume-editor-pill-flash,
+  .resume-editor-score-pulse,
+  .resume-editor-insert-flash,
+  .resume-editor-apply-flash {
+    animation: none;
+  }
+
+  .resume-editor-check-draw path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Live resume editor — recalc UI */
+@keyframes re-score-dots {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.re-score-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-muted);
+  animation: re-score-dots 1.2s ease-in-out infinite;
+}
+
+.re-score-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.re-score-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes re-bar-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.re-progress-track-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.re-progress-track-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.45),
+    transparent
+  );
+  animation: re-bar-shimmer 1.5s ease-in-out infinite;
+}
+
+html.dark .re-progress-track-shimmer::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+}
+
+.re-flash-amber {
+  transition: background-color 0.35s ease;
+  background-color: rgba(245, 158, 11, 0.22) !important;
+}
+
+.re-flash-green {
+  transition: background-color 0.4s ease;
+  background-color: rgba(16, 185, 129, 0.18) !important;
+}
+
+.re-flash-red {
+  transition: background-color 0.4s ease;
+  background-color: rgba(239, 68, 68, 0.12) !important;
+}
+
+@keyframes re-score-explain-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.re-score-explain-in {
+  animation: re-score-explain-in 0.3s ease-out forwards;
+}
+
+@keyframes re-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.re-pill-stagger {
+  opacity: 0;
+  animation: re-pill-in 0.25s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .re-score-dot {
+    animation: none;
+    opacity: 0.6;
+  }
+
+  .re-progress-track-shimmer::after {
+    animation: none;
+  }
+
+  .re-score-explain-in,
+  .re-pill-stagger {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Live resume editor — rewrite highlight */
+.just-applied {
+  background: rgba(16, 185, 129, 0.15);
+  border-radius: 3px;
+  transition: background 1.5s ease;
+}
+
+@keyframes resume-editor-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.resume-editor-copy-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 80;
+  max-width: min(420px, calc(100vw - 32px));
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  animation: resume-editor-toast-in 0.25s ease-out forwards;
+}
+
+.temp-hover-highlight {
+  text-decoration: underline;
+  text-decoration-color: rgba(245, 158, 11, 0.55);
+  text-underline-offset: 3px;
+  background: rgba(245, 158, 11, 0.14);
+  border-radius: 2px;
+}
+
+@keyframes re-apply-all-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.re-editor-apply-all-btn--loading {
+  background-size: 200% 100% !important;
+  animation: re-apply-all-shimmer 1.2s linear infinite;
+}
+
+@keyframes re-score-glow-pulse {
+  0% {
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0.22);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.re-editor-score-glow-pulse {
+  animation: re-score-glow-pulse 0.6s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .re-editor-apply-all-btn--loading {
+    animation: none;
+  }
+
+  .re-editor-score-glow-pulse {
+    animation: none;
+  }
+}
+

@@ -3,6 +3,7 @@
 import { FormEvent, useRef, useState } from "react";
 import Link from "next/link";
 import { ApplyFlowChrome } from "@/components/applyfy/ApplyFlowChrome";
+import { AtsScoreHistory } from "@/components/applyfy/AtsScoreHistory";
 import { useApplyfy } from "@/components/applyfy/ApplyfyProvider";
 import { PageShell } from "@/components/PageShell";
 import { resumeFileToPayload } from "@/lib/resumeFileToPayload";
@@ -11,7 +12,6 @@ export default function AnalyzePage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileLabel, setFileLabel] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   const {
     resume,
@@ -57,22 +57,6 @@ export default function AnalyzePage() {
       setResume("");
     }
   }
-
-  const strengths = analysis?.matchedSkills.slice(0, 4) ?? [];
-  const gaps = analysis?.missingSkills.slice(0, 4) ?? [];
-  const improvements = analysis?.bulletSuggestions.slice(0, 4) ?? [];
-  async function copyImprovement(text: string, idx: number) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedIdx(idx);
-      setTimeout(() => setCopiedIdx((v) => (v === idx ? null : v)), 2000);
-    } catch {
-      setCopiedIdx(null);
-    }
-  }
-
-  const matchedKw = analysis?.atsMatched ?? [];
-  const missingKw = analysis?.atsKeywords ?? [];
 
   return (
     <ApplyFlowChrome>
@@ -170,9 +154,16 @@ export default function AnalyzePage() {
         ) : null}
 
         {analysis && !loadingAnalyze ? (
-          <div className="mt-10 space-y-8 text-left">
+          <div className="mx-auto mt-10 max-w-3xl space-y-6 text-left">
             <p className="text-center text-sm text-gray-600">
               Analysis ready.{" "}
+              <Link
+                href="/resume-editor"
+                className="font-semibold text-accent hover:text-primary-hover"
+              >
+                Resume editor
+              </Link>
+              {" · "}
               <Link
                 href="/match"
                 className="font-semibold text-accent hover:text-primary-hover"
@@ -195,81 +186,101 @@ export default function AnalyzePage() {
               </Link>
             </p>
 
-            {(matchedKw.length > 0 || missingKw.length > 0) ? (
+            <section className="rounded-xl border border-[#2E3E65]/25 bg-gradient-to-br from-[#2E3E65]/8 to-[#4F8EF7]/10 p-5 sm:p-6">
+              <p className="text-lg font-bold tracking-tight text-[#2E3E65]">
+                ATS Alignment:{" "}
+                {Math.min(
+                  100,
+                  Math.max(0, Math.round(analysis.atsScore)),
+                )}
+                /100
+              </p>
+              <p className="mt-2 text-sm text-slate-600">
+                Keyword and phrasing fit between your resume as written and this
+                posting—separate from overall role fit.
+              </p>
+            </section>
+
+            <AtsScoreHistory />
+
+            <section className="rounded-xl border border-emerald-200/80 bg-emerald-50/40 p-6">
+              <h2 className="mb-4 text-sm font-bold text-slate-900">
+                Quick wins
+              </h2>
+              <div className="grid gap-3">
+                {analysis.quickWins.slice(0, 3).map((w, i) => (
+                  <div
+                    key={`qw-${i}`}
+                    className="rounded-lg border border-emerald-200/90 bg-white/90 px-4 py-3 text-sm leading-relaxed text-slate-800 shadow-sm"
+                  >
+                    {w}
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {analysis.keywords.length > 0 ? (
               <section className="rounded-xl border border-slate-200/90 bg-card p-6">
                 <h2 className="mb-3 text-sm font-bold text-slate-900">
                   ATS keywords
                 </h2>
                 <div className="flex flex-wrap gap-2">
-                  {matchedKw.map((k) => (
+                  {analysis.keywords.map((k, i) => (
                     <span
-                      key={`m-${k}`}
-                      className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200"
+                      key={`kw-${k.skill}-${i}`}
+                      className={
+                        k.found
+                          ? "rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200"
+                          : "rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-800 ring-1 ring-red-200"
+                      }
                     >
-                      {k}
-                    </span>
-                  ))}
-                  {missingKw.map((k) => (
-                    <span
-                      key={`x-${k}`}
-                      className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-800 ring-1 ring-red-200"
-                    >
-                      {k}
+                      {k.skill}
                     </span>
                   ))}
                 </div>
                 <p className="mt-2 text-xs text-gray-500">
-                  Green = surfaced on your resume; red = add or strengthen.
+                  Green = clearly demonstrated; red = missing or only listed.
                 </p>
               </section>
             ) : null}
 
             <section className="rounded-xl border border-slate-200/90 bg-card p-6">
               <h2 className="mb-3 text-sm font-bold text-slate-900">
-                Strengths (top signals)
+                Matched strengths
               </h2>
-              <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                {strengths.map((s, i) => (
-                  <li key={`st-${i}`}>{s}</li>
+              <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-700">
+                {analysis.matchedStrengths.slice(0, 4).map((s, i) => (
+                  <li key={`ms-${i}`}>{s}</li>
                 ))}
               </ul>
             </section>
 
             <section className="rounded-xl border border-slate-200/90 bg-card p-6">
-              <h2 className="mb-3 text-sm font-bold text-slate-900">Gaps</h2>
-              <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                {gaps.map((s, i) => (
-                  <li key={`gp-${i}`}>{s}</li>
+              <h2 className="mb-4 text-sm font-bold text-slate-900">Gaps</h2>
+              <div className="space-y-4">
+                {analysis.resumeGaps.map((g, i) => (
+                  <div
+                    key={`gap-${g.skill}-${i}`}
+                    className="rounded-lg border border-slate-200 bg-slate-50/50 p-4"
+                  >
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      {g.skill}
+                    </h3>
+                    <p className="mt-2 text-sm text-slate-500">
+                      <span className="font-medium text-slate-600">
+                        Reality:{" "}
+                      </span>
+                      {g.reality}
+                    </p>
+                    <p className="mt-2 text-sm text-slate-800">
+                      <span className="font-medium text-slate-700">Fix: </span>
+                      {g.fix}
+                    </p>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200/90 bg-card p-6">
-              <h2 className="mb-3 text-sm font-bold text-slate-900">
-                Resume improvements
-              </h2>
-              <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
-                {improvements.map((s, i) => (
-                  <li key={`im-${i}`} className="flex items-start justify-between gap-3">
-                    <span className="pr-2">{s}</span>
-                    <button
-                      type="button"
-                      onClick={() => void copyImprovement(s, i)}
-                      className="shrink-0 rounded border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      {copiedIdx === i ? "Copied!" : "Copy"}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-
-            <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-5">
-              <p className="text-sm text-slate-800">
-                Copy these bullets one by one and paste them into your resume
-                file. Then re-upload for a fresh scan.
-              </p>
-            </section>
           </div>
         ) : null}
       </PageShell>

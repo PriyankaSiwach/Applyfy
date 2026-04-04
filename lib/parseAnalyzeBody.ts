@@ -1,4 +1,5 @@
-const MIN_CHARS = 80;
+export const MIN_JOB_POSTING_CHARS = 80;
+const MIN_CHARS = MIN_JOB_POSTING_CHARS;
 
 function isValidJobUrl(s: string): boolean {
   try {
@@ -9,9 +10,21 @@ function isValidJobUrl(s: string): boolean {
   }
 }
 
+function looksLikeHttpUrl(s: string): boolean {
+  return /^https?:\/\//i.test(s.trim());
+}
+
+export type ParsedAnalyzeJob =
+  | { kind: "fetch"; url: string }
+  | { kind: "text"; text: string; urlContext?: string };
+
 export type ParseAnalyzeResult =
-  | { ok: true; resume: string; jobLink: string; jobPosting?: never }
-  | { ok: true; resume: string; jobPosting: string; jobLink?: never }
+  | {
+      ok: true;
+      resume: string;
+      compareScan: boolean;
+      job: ParsedAnalyzeJob;
+    }
   | { ok: false; error: string; status: number };
 
 export function parseAnalyzeBody(body: unknown): ParseAnalyzeResult {
@@ -20,8 +33,10 @@ export function parseAnalyzeBody(body: unknown): ParseAnalyzeResult {
   }
   const o = body as Record<string, unknown>;
   const resume = typeof o.resume === "string" ? o.resume.trim() : "";
-  const jobPosting = typeof o.jobPosting === "string" ? o.jobPosting.trim() : "";
+  const jobPostingField =
+    typeof o.jobPosting === "string" ? o.jobPosting.trim() : "";
   const jobLinkRaw = typeof o.jobLink === "string" ? o.jobLink.trim() : "";
+  const compareScan = o.compareScan === true;
 
   if (!resume) {
     return { ok: false, error: "resume must be a non-empty string", status: 400 };
@@ -36,31 +51,58 @@ export function parseAnalyzeBody(body: unknown): ParseAnalyzeResult {
     };
   }
 
-  if (jobLinkRaw) {
+  if (jobPostingField.length >= MIN_CHARS) {
+    const urlContext =
+      jobLinkRaw && looksLikeHttpUrl(jobLinkRaw) && isValidJobUrl(jobLinkRaw)
+        ? jobLinkRaw
+        : undefined;
+    return {
+      ok: true,
+      resume,
+      compareScan,
+      job: { kind: "text", text: jobPostingField, urlContext },
+    };
+  }
+
+  if (jobLinkRaw && looksLikeHttpUrl(jobLinkRaw)) {
     if (!isValidJobUrl(jobLinkRaw)) {
       return {
         ok: false,
-        error: "jobLink must be a valid http(s) URL",
+        error:
+          "That link does not look valid. Paste the job description text instead.",
         status: 400,
       };
     }
-    return { ok: true, resume, jobLink: jobLinkRaw };
-  }
-
-  if (!jobPosting) {
     return {
-      ok: false,
-      error: "Provide a job link (jobLink) or paste job text (jobPosting).",
-      status: 400,
-    };
-  }
-  if (jobPosting.length < MIN_CHARS) {
-    return {
-      ok: false,
-      error: `Job posting must be at least ${MIN_CHARS} characters.`,
-      status: 400,
+      ok: true,
+      resume,
+      compareScan,
+      job: { kind: "fetch", url: jobLinkRaw },
     };
   }
 
-  return { ok: true, resume, jobPosting };
+  if (jobLinkRaw.length >= MIN_CHARS) {
+    return {
+      ok: true,
+      resume,
+      compareScan,
+      job: { kind: "text", text: jobLinkRaw },
+    };
+  }
+
+  if (!jobLinkRaw) {
+    return {
+      ok: false,
+      error:
+        "Add a job URL or paste the job description (at least 80 characters).",
+      status: 400,
+    };
+  }
+
+  return {
+    ok: false,
+    error:
+      "Paste a job URL or at least 80 characters of the job description.",
+    status: 400,
+  };
 }

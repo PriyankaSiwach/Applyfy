@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { StoredInterviewPrepView } from "@/components/tracker/StoredInterviewPrepView";
+import { useSubscription } from "@/components/subscription/SubscriptionProvider";
 import { sanitizeCompany, sanitizeJobTitle } from "@/lib/jobMetaFromPosting";
 import {
   deleteTrackerApplication,
@@ -37,6 +39,14 @@ function addDaysYmd(ymd: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function daysSinceYmd(ymd: string): number {
+  const d = new Date(ymd + "T12:00:00");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor((today.getTime() - d.getTime()) / 86400000);
+}
+
 function interviewUrgency(
   interviewDate: string | null,
 ): "today" | "tomorrow" | null {
@@ -70,6 +80,7 @@ Thank you for your time.`;
 }
 
 export default function TrackerPage() {
+  const { isPro, mounted: subMounted } = useSubscription();
   const [apps, setApps] = useState<TrackerApplication[]>([]);
   const [viewApp, setViewApp] = useState<TrackerApplication | null>(null);
   const [prepApp, setPrepApp] = useState<TrackerApplication | null>(null);
@@ -95,6 +106,40 @@ export default function TrackerPage() {
             apps.reduce((s, a) => s + a.matchScore, 0) / apps.length,
           );
     return { totalApplied, interviews, offers, avg };
+  }, [apps]);
+
+  const aiNudges = useMemo(() => {
+    const lines: string[] = [];
+    for (const a of apps) {
+      const title = sanitizeJobTitle(a.jobTitle) || "Role";
+      const company = sanitizeCompany(a.company) || "Company";
+      if (a.status === "Applied") {
+        const days = daysSinceYmd(a.date);
+        if (days >= 7) {
+          lines.push(
+            `Follow-up window: ${title} at ${company} — it’s been ${days} days since you applied.`,
+          );
+        } else if (days >= 3 && days < 7) {
+          lines.push(
+            `Soon: consider a short check-in for ${title} at ${company} (${days} days since applied).`,
+          );
+        }
+      }
+      if (a.status === "Interview") {
+        const u = interviewUrgency(a.interviewDate);
+        if (u) {
+          lines.push(
+            `Interview ${u}: ${title} — prep notes and questions are saved on this card.`,
+          );
+        }
+      }
+      if (a.status === "Saved") {
+        lines.push(
+          `Finish strong: ${title} at ${company} is still marked Saved — submit when ready.`,
+        );
+      }
+    }
+    return lines.slice(0, 5);
   }, [apps]);
 
   function patchApp(id: string, patch: Partial<Omit<TrackerApplication, "id">>) {
@@ -124,6 +169,33 @@ export default function TrackerPage() {
         <p className="mt-2 text-sm text-slate-600">
           Saved automatically when you reach Interview prep in My application.
         </p>
+
+        {subMounted && isPro && aiNudges.length > 0 ? (
+          <div className="mt-8 rounded-2xl border border-[#c7d2fe] bg-gradient-to-r from-[#eef2ff] to-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-[#312e81]">
+                  AI nudges
+                </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Smart reminders based on where each application is in your
+                  pipeline.
+                </p>
+              </div>
+              <Link
+                href="/pricing"
+                className="shrink-0 text-xs font-semibold text-[#4f46e5] underline-offset-2 hover:underline"
+              >
+                Pro
+              </Link>
+            </div>
+            <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-slate-700">
+              {aiNudges.map((line, i) => (
+                <li key={`nudge-${i}-${line.slice(0, 24)}`}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const nextMap: Record<string, string | null> = {
-  "/analyze": "/match",
+  "/analyze": "/resume-editor",
+  "/resume-editor": "/match",
   "/match": "/cover",
   "/cover": "/interview",
   "/interview": null,

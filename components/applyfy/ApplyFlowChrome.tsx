@@ -3,12 +3,18 @@
 import { FlowNextButton } from "@/components/applyfy/FlowNextButton";
 import { FlowStepBar } from "@/components/applyfy/FlowStepBar";
 
-export function ApplyFlowChrome({ children }: { children: React.ReactNode }) {
+export function ApplyFlowChrome({
+  children,
+  hideFlowNext,
+}: {
+  children: React.ReactNode;
+  hideFlowNext?: boolean;
+}) {
   return (
     <>
       <FlowStepBar />
       {children}
-      <FlowNextButton />
+      {!hideFlowNext ? <FlowNextButton /> : null}
     </>
   );
 }

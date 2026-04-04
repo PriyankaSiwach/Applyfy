@@ -5,6 +5,32 @@ import {
 
 export const MAX_JOB_CHARS = 18_000;
 
+/** Fetched HTML must yield at least this much plain text or we ask the user to paste. */
+export const JOB_FETCH_MIN_MEANINGFUL_CHARS = 200;
+
+export const JOB_PASTE_FALLBACK_USER_MESSAGE =
+  "We couldn't read this page directly. Paste the job description text below instead.";
+
+/** Per-request timeout for scraping a job URL (direct or cache). */
+export const JOB_PAGE_FETCH_TIMEOUT_MS = 22_000;
+
+export type JobUrlScrapeResult =
+  | { ok: true; text: string }
+  | {
+      ok: false;
+      kind: "timeout" | "http_error" | "network" | "too_short";
+      message: string;
+      httpStatus?: number;
+    };
+
+const BROWSER_FETCH_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.5",
+};
+
 const JOB_SECTION_PATTERNS = [
   /(?:responsibilit(?:y|ies)|what you(?:'ll)?\s*(?:do|own)|key responsibilities)[^:]{0,40}:?\s*([\s\S]{0,8000}?)(?=(?:qualification|requirement|what we|who you|benefits|about (?:the )?role|nice to have|bonus|perks)\b|$)/gi,
   /(?:qualification|requirement)s?[^:]{0,40}:?\s*([\s\S]{0,8000}?)(?=(?:responsibilit|what you|benefits|nice to have|bonus|apply|about (?:the )?company)\b|$)/gi,
@@ -69,29 +95,143 @@ function extractMeaningfulJobRequirements(cleanedPlain: string): string {
   return merged.slice(0, MAX_JOB_CHARS);
 }
 
-export async function fetchJobDescriptionText(jobLink: string): Promise<string> {
-  const res = await fetch(jobLink, {
-    method: "GET",
-    redirect: "follow",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; Applyfy/1.0; +https://applyfy.app) AppleWebKit/537.36 (KHTML, like Gecko)",
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    signal: AbortSignal.timeout(25_000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Could not fetch job page (HTTP ${res.status})`);
-  }
-
-  const html = await res.text();
+export function htmlToJobDescriptionPlainText(html: string): string {
   const primary = extractPrimaryContent(html);
   const plain = stripHtmlToText(primary);
   const meaningful = extractMeaningfulJobRequirements(plain);
   const fallback = plain.slice(0, MAX_JOB_CHARS);
-  return meaningful.length > 200 ? meaningful : fallback;
+  const body = meaningful.length > 200 ? meaningful : fallback;
+  return body.replace(/\s+/g, " ").trim();
+}
+
+type HtmlFetchMeta =
+  | { ok: true; html: string }
+  | {
+      ok: false;
+      reason: "timeout" | "http_error" | "network";
+      status?: number;
+    };
+
+async function fetchHtmlDocumentWithMeta(
+  url: string,
+  timeoutMs: number,
+): Promise<HtmlFetchMeta> {
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      redirect: "follow",
+      headers: BROWSER_FETCH_HEADERS,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      return { ok: false, reason: "http_error", status: res.status };
+    }
+    const html = await res.text();
+    return { ok: true, html };
+  } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      return { ok: false, reason: "timeout" };
+    }
+    return { ok: false, reason: "network" };
+  }
+}
+
+/**
+ * Scrape job posting text from a URL with explicit failure reasons (timeout, HTTP, etc.).
+ * Tries the live URL first, then Google web cache as fallback.
+ */
+export async function fetchJobDescriptionFromUrlWithDetails(
+  jobLink: string,
+  timeoutMs: number = JOB_PAGE_FETCH_TIMEOUT_MS,
+): Promise<JobUrlScrapeResult> {
+  let best = "";
+  let directMeta: HtmlFetchMeta | null = null;
+  let cacheMeta: HtmlFetchMeta | null = null;
+
+  const direct = await fetchHtmlDocumentWithMeta(jobLink, timeoutMs);
+  directMeta = direct;
+  if (direct.ok) {
+    best = htmlToJobDescriptionPlainText(direct.html);
+  }
+
+  if (best.length >= JOB_FETCH_MIN_MEANINGFUL_CHARS) {
+    return { ok: true, text: best.slice(0, MAX_JOB_CHARS) };
+  }
+
+  const cacheUrl = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(jobLink)}`;
+  const cache = await fetchHtmlDocumentWithMeta(cacheUrl, timeoutMs);
+  cacheMeta = cache;
+  if (cache.ok) {
+    const fromCache = htmlToJobDescriptionPlainText(cache.html);
+    if (fromCache.length > best.length) best = fromCache;
+  }
+
+  if (best.length >= JOB_FETCH_MIN_MEANINGFUL_CHARS) {
+    return { ok: true, text: best.slice(0, MAX_JOB_CHARS) };
+  }
+
+  if (
+    directMeta &&
+    !directMeta.ok &&
+    directMeta.reason === "timeout" &&
+    cacheMeta &&
+    !cacheMeta.ok &&
+    cacheMeta.reason === "timeout"
+  ) {
+    return {
+      ok: false,
+      kind: "timeout",
+      message:
+        "Loading the job page timed out twice (live site and cache). Try again, or paste the job description below.",
+    };
+  }
+
+  if (directMeta && !directMeta.ok && directMeta.reason === "http_error") {
+    const st = directMeta.status;
+    return {
+      ok: false,
+      kind: "http_error",
+      httpStatus: st,
+      message:
+        typeof st === "number"
+          ? `The job URL returned HTTP ${st}. Open the link in your browser to confirm it works, or paste the job description below.`
+          : "The job URL returned an error. Paste the job description below.",
+    };
+  }
+
+  if (
+    directMeta &&
+    !directMeta.ok &&
+    directMeta.reason === "network" &&
+    cacheMeta &&
+    !cacheMeta.ok
+  ) {
+    return {
+      ok: false,
+      kind: "network",
+      message:
+        "We couldn't reach the job URL (network error). Check the link or paste the job description below.",
+    };
+  }
+
+  return {
+    ok: false,
+    kind: "too_short",
+    message: JOB_PASTE_FALLBACK_USER_MESSAGE,
+  };
+}
+
+/**
+ * Best-effort job text from a URL: direct fetch, then Google web cache.
+ * Never throws; may return a short or empty string.
+ */
+export async function fetchJobDescriptionText(jobLink: string): Promise<string> {
+  const r = await fetchJobDescriptionFromUrlWithDetails(
+    jobLink,
+    JOB_PAGE_FETCH_TIMEOUT_MS,
+  );
+  return r.ok ? r.text : "";
 }
 
 /** Pull 8–12 concise requirement lines from scraped job text. */
