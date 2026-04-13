@@ -38,6 +38,11 @@ export const metadata: Metadata = {
   },
   description:
     "Upload your resume and a job listing URL. Get a match score, gap analysis, tailored cover letter, and interview prep.",
+  icons: {
+    icon: [{ url: "/logo.png", type: "image/png" }],
+    apple: [{ url: "/logo.png", type: "image/png" }],
+    shortcut: "/logo.png",
+  },
 };
 
 export default function RootLayout({
@@ -67,7 +72,6 @@ export default function RootLayout({
         />
         <meta property="og:image" content="/logo.png" />
         <meta property="og:title" content="Applyfy" />
-        <link rel="icon" href="/logo.png" />
       </head>
       <body
         className={`${inter.className} flex min-h-full flex-col font-sans antialiased [-webkit-font-smoothing:antialiased] transition-[background-color,color,border-color] duration-300 ease-out`}
