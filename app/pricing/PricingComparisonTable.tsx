@@ -3,171 +3,75 @@
 import { useEffect, useRef, useState } from "react";
 
 type Cell =
-  | { type: "check"; tier: "free" | "pro" | "proplus" }
+  | { type: "check"; tier: "free" | "pro" | "premium" }
   | { type: "x" }
   | { type: "text"; value: string };
 
-const ROWS: { feature: string; free: Cell; pro: Cell; proPlus: Cell }[] = [
+const ROWS: { feature: string; free: Cell; pro: Cell; premium: Cell }[] = [
   {
-    feature: "Analyses per month",
-    free: { type: "text", value: "2/mo" },
+    feature: "Analyses",
+    free: { type: "text", value: "3 total" },
     pro: { type: "text", value: "Unlimited" },
-    proPlus: { type: "text", value: "Unlimited" },
+    premium: { type: "text", value: "Unlimited" },
   },
   {
-    feature: "ATS score",
-    free: { type: "check", tier: "free" },
-    pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    feature: "ATS score + quick wins",
+    free: { type: "text", value: "Score + top 3" },
+    pro: { type: "text", value: "Full" },
+    premium: { type: "text", value: "Full" },
   },
   {
-    feature: "Quick wins",
-    free: { type: "text", value: "Top 3" },
-    pro: { type: "text", value: "All" },
-    proPlus: { type: "text", value: "All" },
+    feature: "Keywords & matched strengths",
+    free: { type: "text", value: "Keywords + 2 strengths" },
+    pro: { type: "text", value: "Full" },
+    premium: { type: "text", value: "Full" },
   },
   {
-    feature: "Keyword pills",
-    free: { type: "text", value: "6 max" },
-    pro: { type: "text", value: "All" },
-    proPlus: { type: "text", value: "All" },
-  },
-  {
-    feature: "Matched strengths",
-    free: { type: "text", value: "2 max" },
-    pro: { type: "text", value: "All" },
-    proPlus: { type: "text", value: "All" },
-  },
-  {
-    feature: "Full gaps & fixes",
+    feature: "Score history & readiness",
     free: { type: "x" },
     pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
   {
-    feature: "Resume rewrites",
+    feature: "Gaps detail (Analyze)",
     free: { type: "x" },
     pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
   {
-    feature: "Keyword match table",
+    feature: "Resume Editor · Match · Cover",
     free: { type: "x" },
     pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
   {
-    feature: "Cover letter generations",
-    free: { type: "text", value: "1" },
-    pro: { type: "text", value: "Unlimited" },
-    proPlus: { type: "text", value: "Unlimited" },
-  },
-  {
-    feature: "Cover letter tones",
-    free: { type: "text", value: "1" },
-    pro: { type: "text", value: "All 3" },
-    proPlus: { type: "text", value: "All 3" },
-  },
-  {
-    feature: "Download PDF & DOCX",
+    feature: "Interview prep (core)",
     free: { type: "x" },
     pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
   {
-    feature: "Interview questions",
-    free: { type: "text", value: "3" },
-    pro: { type: "text", value: "Unlimited" },
-    proPlus: { type: "text", value: "Unlimited" },
-  },
-  {
-    feature: "Question tips",
+    feature: "Tracker (edit / unlimited)",
     free: { type: "x" },
     pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
   {
-    feature: "Score history graph",
-    free: { type: "x" },
-    pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Ready to apply checker",
-    free: { type: "x" },
-    pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Follow-up email generator",
-    free: { type: "x" },
-    pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Job tracker + AI nudges",
-    free: { type: "x" },
-    pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Interview simulator + AI scoring",
+    feature: "Interview Simulator",
     free: { type: "x" },
     pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
   {
-    feature: "Salary negotiation coach",
+    feature: "Salary coach · more questions · follow-up email",
     free: { type: "x" },
     pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "LinkedIn optimizer",
-    free: { type: "x" },
-    pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "A/B resume testing",
-    free: { type: "x" },
-    pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Career coach chat (AI)",
-    free: { type: "x" },
-    pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Bulk apply (5 jobs at once)",
-    free: { type: "x" },
-    pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Weekly market fit report",
-    free: { type: "x" },
-    pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Cover letter memory",
-    free: { type: "x" },
-    pro: { type: "x" },
-    proPlus: { type: "check", tier: "proplus" },
-  },
-  {
-    feature: "Priority AI processing",
-    free: { type: "x" },
-    pro: { type: "check", tier: "pro" },
-    proPlus: { type: "check", tier: "proplus" },
+    premium: { type: "check", tier: "premium" },
   },
 ];
 
-function cellRingClass(tier: "free" | "pro" | "proplus") {
-  if (tier === "free") return "bg-[rgba(16,185,129,0.12)] text-[#10b981]";
+function cellRingClass(tier: "free" | "pro" | "premium") {
+  if (tier === "free") return "bg-[rgba(124,58,237,0.12)] text-[#6d28d9]";
   if (tier === "pro") return "bg-[rgba(107,140,255,0.12)] text-[var(--brand)]";
   return "bg-[rgba(245,158,11,0.12)] text-[#f59e0b]";
 }
@@ -242,7 +146,7 @@ export function PricingComparisonTable() {
               Pro
             </th>
             <th className="border-b border-[var(--border)] px-5 py-4 text-center text-[13px] font-bold text-[#f59e0b]">
-              Pro+
+              Premium
             </th>
           </tr>
         </thead>
@@ -284,7 +188,7 @@ export function PricingComparisonTable() {
                   i < ROWS.length - 1 ? "border-b border-[var(--border)]" : ""
                 }`}
               >
-                <RenderCell cell={row.proPlus} />
+                <RenderCell cell={row.premium} />
               </td>
             </tr>
           ))}

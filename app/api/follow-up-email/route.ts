@@ -1,6 +1,7 @@
 import { extractJobTitleAndCompany } from "@/lib/jobMetaFromPosting";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
+import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,9 @@ function extractAnthropicText(data: unknown): string {
 }
 
 export async function POST(request: Request) {
+  const premiumGate = await requirePremiumForApi(request);
+  if (!premiumGate.ok) return premiumGate.response;
+
   if (!ANTHROPIC_API_KEY) {
     return jsonNoStore(
       { error: "Missing ANTHROPIC_API_KEY on the server" },

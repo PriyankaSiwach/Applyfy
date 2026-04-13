@@ -2,12 +2,14 @@
 
 import {
   createContext,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
 } from "react";
+import { usePathname } from "next/navigation";
 
 const STORAGE_KEY = "applyfy-theme";
 
@@ -22,8 +24,37 @@ type ThemeContextValue = {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-function applyClass(theme: Theme) {
+export function applyDocumentThemeClass(theme: Theme) {
   document.documentElement.classList.toggle("dark", theme === "dark");
+}
+
+/** Dark mode is only applied on home (`/`) and dashboard — keeps other routes in light palette. */
+export function isDarkAllowedPath(pathname: string | null | undefined): boolean {
+  if (!pathname) return false;
+  return pathname === "/" || pathname === "/dashboard";
+}
+
+function syncDocumentToRouteAndTheme(pathname: string | null, theme: Theme) {
+  if (!isDarkAllowedPath(pathname)) {
+    document.documentElement.classList.remove("dark");
+    return;
+  }
+  applyDocumentThemeClass(theme);
+}
+
+function ThemeDocumentSync({
+  theme,
+  mounted,
+}: {
+  theme: Theme;
+  mounted: boolean;
+}) {
+  const pathname = usePathname();
+  useEffect(() => {
+    if (!mounted) return;
+    syncDocumentToRouteAndTheme(pathname, theme);
+  }, [mounted, pathname, theme]);
+  return null;
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -41,7 +72,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
     setThemeState(initial);
-    applyClass(initial);
     setMounted(true);
   }, []);
 
@@ -52,7 +82,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* ignore */
     }
-    applyClass(t);
+    const p =
+      typeof window !== "undefined" ? window.location.pathname ?? "" : "";
+    syncDocumentToRouteAndTheme(p, t);
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -63,7 +95,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       } catch {
         /* ignore */
       }
-      applyClass(next);
+      const p =
+        typeof window !== "undefined" ? window.location.pathname ?? "" : "";
+      syncDocumentToRouteAndTheme(p, next);
       return next;
     });
   }, []);
@@ -79,7 +113,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+    <ThemeContext.Provider value={value}>
+      <Suspense fallback={null}>
+        <ThemeDocumentSync theme={theme} mounted={mounted} />
+      </Suspense>
+      {children}
+    </ThemeContext.Provider>
   );
 }
 

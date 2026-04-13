@@ -30,7 +30,7 @@ export function StoredInterviewPrepView({ prep }: { prep: InterviewPrep }) {
               <p className="mt-3 text-sm leading-relaxed text-slate-700">
                 {item.fullAnswer}
               </p>
-              <div className="mt-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              <div className="mt-3 rounded-md border border-violet-100 bg-violet-50/80 px-3 py-2 text-xs text-violet-900">
                 Tip: {item.tip}
               </div>
             </article>
@@ -55,7 +55,7 @@ export function StoredInterviewPrepView({ prep }: { prep: InterviewPrep }) {
               <p className="mt-3 text-sm leading-relaxed text-slate-700">
                 {item.fullAnswer}
               </p>
-              <div className="mt-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              <div className="mt-3 rounded-md border border-violet-100 bg-violet-50/80 px-3 py-2 text-xs text-violet-900">
                 Tip: {item.tip}
               </div>
             </article>

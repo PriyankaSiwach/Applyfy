@@ -78,7 +78,7 @@ function ModalHeader({ titleId }: { titleId: string }) {
           className="rounded-md border border-[rgba(245,158,11,0.3)] bg-[rgba(245,158,11,0.12)] px-2 py-0.5 text-[11px] font-bold text-[#f59e0b]"
           style={{ padding: "2px 8px", borderRadius: 6 }}
         >
-          Pro+
+          Premium
         </span>
       </div>
       <p className="text-sm text-[var(--text-secondary)]">
@@ -97,7 +97,7 @@ export function SalaryNegotiationCoachModal({
 }) {
   const uid = useId();
   const titleId = `${uid}-salary-coach-title`;
-  const { isProPlus, mounted } = useSubscription();
+  const { isPremium, mounted } = useSubscription();
   const { jobPosting, copyPlainText } = useApplyfy();
 
   const [jobTitle, setJobTitle] = useState("");
@@ -226,7 +226,7 @@ export function SalaryNegotiationCoachModal({
     return null;
   }
 
-  const inner = !isProPlus ? (
+  const inner = !isPremium ? (
     <div className="pr-10 text-center">
       <ModalHeader titleId={titleId} />
       <Link
@@ -235,7 +235,7 @@ export function SalaryNegotiationCoachModal({
         style={{ background: "var(--gradient-hero)" }}
         onClick={onClose}
       >
-        Upgrade to Pro+
+        Upgrade to Premium
       </Link>
     </div>
   ) : phase === "error" ? (
@@ -271,8 +271,8 @@ export function SalaryNegotiationCoachModal({
       <div
         className="mt-6 rounded-xl border p-4 sm:p-5"
         style={{
-          background: "rgba(16,185,129,0.08)",
-          borderColor: "rgba(16,185,129,0.2)",
+          background: "rgba(124,58,237,0.08)",
+          borderColor: "rgba(124,58,237,0.22)",
           borderRadius: 12,
           padding: "16px 20px",
         }}
@@ -303,7 +303,7 @@ export function SalaryNegotiationCoachModal({
                 className="absolute right-4 top-4 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-2.5 py-1 text-xs font-medium text-[var(--text-secondary)] transition hover:bg-[var(--bg-card-hover)]"
               >
                 {copiedKey === key ? (
-                  <span className="text-emerald-600">Copied ✓</span>
+                  <span className="text-violet-600">Copied ✓</span>
                 ) : (
                   "Copy"
                 )}

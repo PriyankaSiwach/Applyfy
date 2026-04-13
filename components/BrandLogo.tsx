@@ -15,12 +15,12 @@ export function BrandLogo({ variant = "inline", className = "" }: BrandLogoProps
     ) : variant === "nav" ? (
       <>
         <span className="font-bold text-[#0f172a]">Apply</span>
-        <span className="font-bold text-[#1a56db]">fy</span>
+        <span className="font-bold text-[#7c3aed]">fy</span>
       </>
     ) : (
       <>
         <span className="font-bold text-[#0f172a]">Apply</span>
-        <span className="font-bold text-[#1a56db]">fy</span>
+        <span className="font-bold text-[#7c3aed]">fy</span>
       </>
     );
 
@@ -42,7 +42,7 @@ export function BrandLogoLink({
       className={`flex shrink-0 items-center rounded-lg focus:outline-none focus-visible:ring-2 ${
         variant === "dark"
           ? "focus-visible:ring-[#3b7eff] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d0f14]"
-          : "focus-visible:ring-[#1a56db] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+          : "focus-visible:ring-[#7c3aed] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
       }`}
     >
       <BrandLogo variant={variant} />

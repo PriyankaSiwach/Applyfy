@@ -1,14 +1,15 @@
 import type { PredictedQuestion } from "@/lib/analysisTypes";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
+import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
+import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-4o";
 
 function extractJsonObject(content: string): Record<string, unknown> {
   const trimmed = content.trim();
@@ -58,6 +59,9 @@ function parseQuestions(
 }
 
 export async function POST(request: Request) {
+  const premiumGate = await requirePremiumForApi(request);
+  if (!premiumGate.ok) return premiumGate.response;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -69,12 +73,11 @@ export async function POST(request: Request) {
   const kind: "behavioral" | "technical" =
     kindRaw === "technical" ? "technical" : "behavioral";
 
-  if (!OPENAI_API_KEY) {
-    return jsonNoStore(
-      { error: "Missing OPENAI_API_KEY on the server" },
-      { status: 503 },
-    );
+  const keyCheck = requireOpenAiApiKey();
+  if (!keyCheck.ok) {
+    return jsonNoStore({ error: keyCheck.error }, { status: 503 });
   }
+  const openaiKey = keyCheck.key;
 
   const resumeIn = typeof o.resume === "string" ? o.resume : "";
   const jobPosting = typeof o.jobPosting === "string" ? o.jobPosting.trim() : "";
@@ -134,7 +137,7 @@ All text fields must read like a human wrote them for a human to speak aloud.`;
       method: "POST",
       cache: "no-store",
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${openaiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

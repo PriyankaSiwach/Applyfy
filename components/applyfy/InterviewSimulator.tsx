@@ -4,8 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PredictedQuestion } from "@/lib/analysisTypes";
 import type { InterviewSimulatorScoreResult } from "@/lib/interviewSimulatorScore";
 import { ScoreArcOutOfTen } from "@/components/applyfy/ScoreArc";
+import { PremiumLockedButtonWrap } from "@/components/subscription/PremiumLockedButtonWrap";
 
 type Step = 1 | 2 | 3;
+
+type HistoryEntry = {
+  question: string;
+  answer: string;
+  score: InterviewSimulatorScoreResult;
+};
 
 function wordCount(text: string): number {
   const t = text.trim();
@@ -16,7 +23,7 @@ function wordCount(text: string): number {
 function barToneClass(score: number): string {
   if (score < 5) return "bg-red-500";
   if (score <= 7) return "bg-amber-500";
-  return "bg-emerald-500";
+  return "bg-violet-500";
 }
 
 function TypingDots() {
@@ -29,7 +36,7 @@ function TypingDots() {
       {[0, 1, 2].map((i) => (
         <span
           key={i}
-          className="h-2.5 w-2.5 rounded-full bg-[#1a56db] [animation:sim-dot_1.2s_ease-in-out_infinite]"
+          className="h-2.5 w-2.5 rounded-full bg-[#7c3aed] [animation:sim-dot_1.2s_ease-in-out_infinite]"
           style={{ animationDelay: `${i * 150}ms` }}
         />
       ))}
@@ -76,10 +83,122 @@ function DimensionScoreBar({
   );
 }
 
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1800);
+        });
+      }}
+      className="flex items-center gap-1.5 rounded-lg border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#64748b] transition hover:bg-[#f8fafc] hover:text-[#0f172a]"
+    >
+      {copied ? (
+        <>
+          <svg className="h-3.5 w-3.5 text-[#7c3aed]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Copied
+        </>
+      ) : (
+        <>
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          {label}
+        </>
+      )}
+    </button>
+  );
+}
+
+function overallTone(score: number): string {
+  if (score < 5) return "text-red-600";
+  if (score <= 7) return "text-amber-600";
+  return "text-violet-600";
+}
+
+function AnswerHistory({
+  history,
+  onBack,
+}: {
+  history: HistoryEntry[];
+  onBack: () => void;
+}) {
+  const allText = history
+    .map(
+      (h, i) =>
+        `Q${i + 1}: ${h.question}\n\nAnswer: ${h.answer}\n\nScore: ${h.score.overall}/10`,
+    )
+    .join("\n\n---\n\n");
+
+  return (
+    <div className="mt-4 space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-sm font-medium text-[#7c3aed] transition hover:underline"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to practice
+        </button>
+        {history.length > 0 && (
+          <CopyButton text={allText} label="Copy all" />
+        )}
+      </div>
+
+      {history.length === 0 ? (
+        <p className="py-8 text-center text-sm text-[#94a3b8]">
+          No answers recorded yet — submit an answer to see it here.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {history.map((h, i) => (
+            <div
+              key={i}
+              className="rounded-xl border border-[#e2e8f0] bg-white p-5"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-[14px] font-bold leading-snug text-[#0f172a]">
+                  <span className="mr-1.5 text-[#7c3aed]">Q{i + 1}.</span>
+                  {h.question}
+                </p>
+                <CopyButton
+                  text={`Q: ${h.question}\n\nAnswer: ${h.answer}\n\nScore: ${h.score.overall}/10`}
+                />
+              </div>
+              <p className="mt-3 whitespace-pre-wrap text-[13px] leading-[1.7] text-[#334155]">
+                {h.answer}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[#f1f5f9] pt-3 text-[12px] text-[#64748b]">
+                <span className={`font-semibold ${overallTone(h.score.overall)}`}>
+                  Overall {h.score.overall}/10
+                </span>
+                <span>Clarity {h.score.clarity.score}/10</span>
+                <span>Specificity {h.score.specificity.score}/10</span>
+                <span>STAR {h.score.star.score}/10</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function InterviewSimulator({
   questions,
+  isPremium = true,
 }: {
   questions: PredictedQuestion[];
+  /** When false, shows the full simulator UI but locks scoring actions for non‑Premium users. */
+  isPremium?: boolean;
 }) {
   const total = questions.length;
   const [qIndex, setQIndex] = useState(0);
@@ -90,8 +209,14 @@ export function InterviewSimulator({
   const [result, setResult] = useState<InterviewSimulatorScoreResult | null>(
     null,
   );
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
 
-  const current = questions[qIndex];
+  // Clamp index whenever the questions list shrinks (shouldn't normally happen,
+  // but guards against stale state if the parent re-renders with fewer items).
+  const safeIndex = Math.min(qIndex, Math.max(0, total - 1));
+  const current = questions[safeIndex];
+  const isLastQuestion = safeIndex >= total - 1;
 
   const resetForQuestion = useCallback((idx: number) => {
     setQIndex(idx);
@@ -101,7 +226,18 @@ export function InterviewSimulator({
     setError(null);
   }, []);
 
+  useEffect(() => {
+    if (isPremium) return;
+    setStep(1);
+    setAnswer("");
+    setResult(null);
+    setError(null);
+    setLoading(false);
+    setShowHistory(false);
+  }, [isPremium]);
+
   const submitScore = useCallback(async () => {
+    if (!isPremium) return;
     if (!current || !answer.trim()) return;
     setLoading(true);
     setError(null);
@@ -132,21 +268,25 @@ export function InterviewSimulator({
       }
       setResult(data.score);
       setStep(3);
+      setHistory((prev) => [
+        ...prev,
+        { question: current.question, answer: answer.trim(), score: data.score! },
+      ]);
     } catch {
       setError("Could not score answer — try again.");
     } finally {
       setLoading(false);
     }
-  }, [current, answer]);
+  }, [current, answer, isPremium]);
 
   const headerProgress = useMemo(() => {
     if (total < 1) return null;
     return (
       <p className="mb-4 text-center text-sm font-medium text-[#64748b]">
-        Question {qIndex + 1} of {total}
+        Question {safeIndex + 1} of {total}
       </p>
     );
-  }, [qIndex, total]);
+  }, [safeIndex, total]);
 
   if (total < 1) {
     return (
@@ -160,14 +300,31 @@ export function InterviewSimulator({
   }
 
   return (
-    <div className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm sm:p-8">
-      <h3 className="text-center text-xl font-bold text-[#0f172a]">
-        Interview Simulator
-      </h3>
-      <p className="mt-1 text-center text-sm text-[#64748b]">
-        Practice answers — scored on clarity, specificity, and STAR.
-      </p>
+    <div className="rounded-2xl border border-[#ddd6fe] bg-gradient-to-b from-white to-[#faf8ff] p-6 shadow-[0_16px_48px_-16px_rgba(124,58,237,0.14)] ring-1 ring-[#ede9fe]/80 sm:p-8">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 text-center">
+          <h3 className="text-xl font-bold text-[#0f172a]">
+            Interview Simulator
+          </h3>
+          <p className="mt-1 text-sm text-[#64748b]">
+            Practice answers — scored on clarity, specificity, and STAR.
+          </p>
+        </div>
+        {history.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowHistory((v) => !v)}
+            className="shrink-0 rounded-lg border border-[#e2e8f0] bg-white px-3 py-1.5 text-xs font-medium text-[#64748b] transition hover:bg-[#f8fafc] hover:text-[#0f172a]"
+          >
+            {showHistory ? "Back to practice" : `Answers (${history.length})`}
+          </button>
+        )}
+      </div>
 
+      {showHistory ? (
+        <AnswerHistory history={history} onBack={() => setShowHistory(false)} />
+      ) : (
+        <>
       {headerProgress}
 
       {step === 1 && current ? (
@@ -178,19 +335,30 @@ export function InterviewSimulator({
           <p className="mt-4 text-[15px] italic leading-relaxed text-[#64748b]">
             Why they ask this: {current.context}
           </p>
-          <button
-            type="button"
-            onClick={() => setStep(2)}
-            className="mt-8 w-full rounded-xl bg-[#1a56db] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#1d4ed8] sm:w-auto"
-          >
-            Start answering
-          </button>
+          <PremiumLockedButtonWrap isPremium={isPremium} fullWidth className="mt-8">
+            <button
+              type="button"
+              onClick={() => setStep(2)}
+              className="applyfy-btn-primary w-full rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] px-5 py-3 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:brightness-[1.05] sm:w-auto"
+            >
+              Start answering
+            </button>
+          </PremiumLockedButtonWrap>
         </div>
       ) : null}
 
+      {/* Step 2: keep the question visible above the textarea */}
       {step === 2 && current && !loading ? (
         <div className="mt-6">
-          <div className="relative rounded-xl border border-[#e2e8f0] bg-white p-1 focus-within:border-[#1a56db] focus-within:ring-2 focus-within:ring-[#1a56db]/15">
+          <div className="mb-4 rounded-xl border border-[#e2e8f0] bg-[#fafafa] px-5 py-4">
+            <p className="text-[17px] font-bold leading-snug text-[#0f172a]">
+              {current.question}
+            </p>
+            <p className="mt-2 text-[13px] italic leading-relaxed text-[#64748b]">
+              Why they ask this: {current.context}
+            </p>
+          </div>
+          <div className="relative rounded-xl border border-[#e2e8f0] bg-white p-1 focus-within:border-[#7c3aed] focus-within:ring-2 focus-within:ring-[#7c3aed]/20">
             <textarea
               value={answer}
               onChange={(e) => setAnswer(e.target.value)}
@@ -206,14 +374,16 @@ export function InterviewSimulator({
           {error ? (
             <p className="mt-3 text-sm text-red-600">{error}</p>
           ) : null}
-          <button
-            type="button"
-            disabled={!answer.trim()}
-            onClick={() => void submitScore()}
-            className="mt-5 w-full rounded-xl bg-[#1a56db] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-          >
-            Submit for scoring
-          </button>
+          <PremiumLockedButtonWrap isPremium={isPremium} fullWidth className="mt-5">
+            <button
+              type="button"
+              disabled={!answer.trim() || !isPremium}
+              onClick={() => void submitScore()}
+              className="applyfy-btn-primary w-full rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] px-5 py-3 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:brightness-[1.05] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+            >
+              Submit for scoring
+            </button>
+          </PremiumLockedButtonWrap>
         </div>
       ) : null}
 
@@ -246,8 +416,8 @@ export function InterviewSimulator({
             <ScoreArcOutOfTen score={result.overall} />
           </div>
 
-          <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/60 px-4 py-3 text-sm text-[#0f172a]">
-            <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">
+          <div className="rounded-xl border border-violet-200/80 bg-violet-50/70 px-4 py-3 text-sm text-[#0f172a]">
+            <p className="text-xs font-bold uppercase tracking-wide text-violet-800">
               What you did well
             </p>
             <p className="mt-1 leading-relaxed">{result.top_strength}</p>
@@ -273,19 +443,28 @@ export function InterviewSimulator({
             >
               Try again
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                const next = (qIndex + 1) % total;
-                resetForQuestion(next);
-              }}
-              className="rounded-xl bg-[#1a56db] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1d4ed8]"
-            >
-              Next question
-            </button>
+            {isLastQuestion ? (
+              <button
+                type="button"
+                onClick={() => resetForQuestion(0)}
+                className="applyfy-btn-primary rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] px-5 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:brightness-[1.05]"
+              >
+                Start over
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => resetForQuestion(safeIndex + 1)}
+                className="applyfy-btn-primary rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] px-5 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:brightness-[1.05]"
+              >
+                Next question
+              </button>
+            )}
           </div>
         </div>
       ) : null}
+        </>
+      )}
     </div>
   );
 }

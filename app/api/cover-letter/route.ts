@@ -5,14 +5,14 @@ import type { CoverLength, CoverTone } from "@/lib/parseCoverLetterBody";
 import { parseCoverLetterBody } from "@/lib/parseCoverLetterBody";
 import { resumeTextFingerprint } from "@/lib/resumeFingerprint";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
+import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-4o";
 
 function lengthGuidance(len: CoverLength): string {
   switch (len) {
@@ -37,6 +37,7 @@ function toneGuidance(tone: CoverTone): string {
 }
 
 async function runCoverLetterOpenAI(params: {
+  openaiApiKey: string;
   resumeText: string;
   jobDescription: string;
   jobLink: string;
@@ -56,14 +57,15 @@ Tone: {tone} (Concise = direct and punchy, Confident = assertive and achievement
 Length: {length} (Short = 150 words, Standard = 250 words, Detailed = 380 words)
 
 Rules you must follow:
-- First line must name the exact job title and company extracted from the posting
+- SALUTATION: If exactCompanyName is provided and non-empty, write "Dear [exactCompanyName] Team,". Otherwise write "Dear Hiring Manager,". Never invent a person's name.
+- OPENING LINE: The very first sentence of the letter body must follow this exact formula: "I am writing to express my interest in the [exactJobTitle] role at [exactCompanyName]." (If no company name is available, omit "at [company]".) Never place a task description or job duty in the opening line. Never wrap the title in quotes or rephrase it as a duty.
 - Never quote the job description word for word — always paraphrase and make it first-person
 - Every paragraph must reference something SPECIFIC from the resume — a real project, metric, or skill
 - Sound like a real ambitious human wrote this, not an AI
 - Vary sentence length for natural rhythm
 - End with a confident close — not "I hope to hear from you"
 - Sign off as "Sincerely," followed by a blank line — do not write [Your Name]
-- Each regeneration must produce a meaningfully different letter — different opening line, different structure, different examples pulled from the resume`;
+- Each regeneration must produce a meaningfully different letter — different body paragraphs, different examples pulled from the resume (the opening formula stays constant)`;
 
     const user = `resumeText:
 ${params.resumeText.slice(0, 24_000)}
@@ -85,7 +87,7 @@ ${params.topRequirements.slice(0, 3).map((r, i) => `${i + 1}. ${r}`).join("\n")}
       method: "POST",
       cache: "no-store",
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${params.openaiApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -141,11 +143,9 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!OPENAI_API_KEY) {
-    return jsonNoStore(
-      { error: "Missing OPENAI_API_KEY on the server" },
-      { status: 503 },
-    );
+  const keyCheck = requireOpenAiApiKey();
+  if (!keyCheck.ok) {
+    return jsonNoStore({ error: keyCheck.error }, { status: 503 });
   }
 
   let resumeText: string;
@@ -187,26 +187,24 @@ export async function POST(request: Request) {
     );
   }
 
-  const topRequirements = extractKeyRequirementsFromJob(jobText).slice(
-    0,
-    3,
-  );
-  const { title, company } = extractJobTitleAndCompany(
-    jobText,
-    parsed.jobLink,
-  );
-  if (!title || !company) {
-    return jsonNoStore(
-      {
-        error:
-          "Could not extract exact job title and company from the posting text.",
-      },
-      { status: 400 },
-    );
+  const topRequirements = extractKeyRequirementsFromJob(jobText).slice(0, 3);
+
+  // Caller-provided values take priority over extraction
+  const { title: extractedTitle, company: extractedCompany } =
+    extractJobTitleAndCompany(jobText, parsed.jobLink);
+
+  const title = parsed.jobTitle || extractedTitle;
+  const company = parsed.jobCompany || extractedCompany;
+
+  // If still no title after extraction, signal the client to ask the user
+  if (!title) {
+    return jsonNoStore({ error: "MISSING_JOB_META" }, { status: 422 });
   }
+  // company is optional — prompt falls back gracefully when empty
 
   try {
     const letter = await runCoverLetterOpenAI({
+      openaiApiKey: keyCheck.key,
       resumeText,
       jobDescription: jobText,
       jobLink: parsed.jobLink,

@@ -6,11 +6,13 @@ export function InterviewSimulatorTeaser({ locked }: { locked: boolean }) {
   return (
     <FeatureLock
       locked={locked}
-      tier="pro_plus"
-      description="Practice your answers and get AI scores on clarity, specificity, and STAR method."
+      tier="premium"
+      description="Unlock this feature with Premium — practice answers and get AI scores on clarity, specificity, and STAR."
     >
-      <div className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-[#0f172a]">Interview Simulator</h3>
+      <div className="rounded-2xl border border-[#ddd6fe] bg-gradient-to-b from-white to-[#faf8ff] p-6 shadow-[0_12px_40px_-14px_rgba(124,58,237,0.12)]">
+        <h3 className="font-[family-name:var(--font-plus-jakarta)] text-lg font-bold text-[#0f172a]">
+          Interview Simulator
+        </h3>
         <p className="mt-2 text-sm leading-relaxed text-[#64748b]">
           Practice your answers and get AI scores on clarity, specificity, and STAR
           method.
@@ -25,8 +27,8 @@ export function InterviewSimulatorTeaser({ locked }: { locked: boolean }) {
             <div className="h-2.5 w-[78%] rounded bg-[#e2e8f0]" />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <div className="h-9 min-w-[120px] flex-1 rounded-lg bg-[#1a56db]/15" />
-            <div className="flex h-9 w-24 items-center justify-center rounded-lg bg-[#10b981]/25 text-xs font-bold text-[#047857]">
+            <div className="h-9 min-w-[120px] flex-1 rounded-lg bg-[#7c3aed]/12" />
+            <div className="flex h-9 w-24 items-center justify-center rounded-lg bg-[#ede9fe] text-xs font-bold text-[#5b21b6]">
               8.5/10
             </div>
           </div>

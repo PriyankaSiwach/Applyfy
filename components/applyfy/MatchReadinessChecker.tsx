@@ -17,7 +17,7 @@ type ReadinessRow = {
 function StatusIcon({ tone }: { tone: RowTone }) {
   const ring =
     tone === "green"
-      ? "bg-emerald-500/12 text-emerald-600 ring-emerald-500/35"
+      ? "bg-emerald-500/12 text-emerald-700 ring-emerald-500/35"
       : tone === "amber"
         ? "bg-amber-500/12 text-amber-600 ring-amber-500/35"
         : "bg-red-500/12 text-red-600 ring-red-500/35";
@@ -62,16 +62,16 @@ function verdictFromGreenCount(n: number): {
 
 function badgeClass(tone: RowTone): string {
   if (tone === "green") {
-    return "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200";
+    return "border-emerald-500/40 bg-emerald-500/10 text-emerald-900";
   }
   if (tone === "amber") {
-    return "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100";
+    return "border-amber-500/40 bg-amber-500/10 text-amber-900";
   }
-  return "border-red-500/40 bg-red-500/10 text-red-900 dark:text-red-100";
+  return "border-red-500/40 bg-red-500/10 text-red-900";
 }
 
 function trafficDotClass(tone: RowTone): string {
-  if (tone === "green") return "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.55)]";
+  if (tone === "green") return "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.45)]";
   if (tone === "amber") return "bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.5)]";
   return "bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.45)]";
 }
@@ -110,7 +110,7 @@ export function MatchReadinessChecker({
               key: "ats",
               tone: "amber",
               title: "ATS score needs work",
-              sub: "Tighten bullets and weave in missing keywords from the job description.",
+              sub: "Strengthen existing bullets only — honest keyword framing, no invented skills.",
             }
           : {
               key: "ats",

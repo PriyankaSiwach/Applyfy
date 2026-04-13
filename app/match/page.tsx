@@ -8,6 +8,8 @@ import { MatchScoreArcAndBreakdown } from "@/components/applyfy/MatchScoreArcAnd
 import { NeedAnalysis } from "@/components/NeedAnalysis";
 import { PageShell } from "@/components/PageShell";
 import { useApplyfy } from "@/components/applyfy/ApplyfyProvider";
+import { GatedFeature } from "@/components/subscription/GatedFeature";
+import { analysisForMatchDisplay } from "@/lib/matchDisplayAnalysis";
 
 function SkillPill({
   text,
@@ -23,16 +25,42 @@ function SkillPill({
   const shown = text.length > 72 ? `${text.slice(0, 70)}…` : text;
   return (
     <span
-      className={`inline-block max-w-full truncate rounded-full px-3 py-1 text-xs font-medium ring-1 ${base}`}
+      className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-3 py-1 text-xs font-medium ring-1 ${base}`}
       title={text}
     >
-      {shown}
+      {variant === "match" ? (
+        <svg
+          className="h-3 w-3 shrink-0 text-emerald-600"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+          aria-hidden
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M5 13l4 4L19 7"
+          />
+        </svg>
+      ) : null}
+      <span className="min-w-0 truncate">{shown}</span>
     </span>
   );
 }
 
 export default function MatchPage() {
-  const { baselineAnalysis, coverLetter, loadingCoverLetter } = useApplyfy();
+  const {
+    baselineAnalysis,
+    committedHybridAtsScore,
+    coverLetter,
+    loadingCoverLetter,
+  } = useApplyfy();
+
+  const matchDisplayAnalysis = useMemo(() => {
+    if (!baselineAnalysis) return null;
+    return analysisForMatchDisplay(baselineAnalysis, committedHybridAtsScore);
+  }, [baselineAnalysis, committedHybridAtsScore]);
 
   const presentSkills = useMemo(
     () =>
@@ -54,7 +82,7 @@ export default function MatchPage() {
 
   const why = baselineAnalysis?.matchExplanation.slice(0, 3) ?? [];
 
-  if (!baselineAnalysis) {
+  if (!baselineAnalysis || !matchDisplayAnalysis) {
     return (
       <ApplyFlowChrome>
         <PageShell narrow={false}>
@@ -67,6 +95,13 @@ export default function MatchPage() {
   return (
     <ApplyFlowChrome>
       <PageShell narrow={false}>
+        <GatedFeature
+          requiredTier="pro"
+          hidePlaceholder
+          className="min-h-[320px] space-y-8"
+          title="Match"
+          description="Upgrade to Pro for your match score, breakdown, readiness view, and keyword table."
+        >
         <div className="space-y-8">
           <h1 className="text-center text-3xl font-bold tracking-tight text-slate-900">
             Match
@@ -76,10 +111,10 @@ export default function MatchPage() {
             <h2 className="mb-4 text-center text-xs font-semibold uppercase tracking-wider text-gray-600">
               Match score
             </h2>
-            <MatchScoreArcAndBreakdown analysis={baselineAnalysis} />
+            <MatchScoreArcAndBreakdown analysis={matchDisplayAnalysis} />
             <div className="mt-8 border-t border-slate-100 pt-6">
               <MatchReadinessChecker
-                analysis={baselineAnalysis}
+                analysis={matchDisplayAnalysis}
                 coverLetter={coverLetter}
                 loadingCoverLetter={loadingCoverLetter}
               />
@@ -185,6 +220,10 @@ export default function MatchPage() {
                   </tbody>
                 </table>
               </div>
+              <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                Matches use semantic evidence (tools, outcomes, behaviors)—not
+                only exact keyword phrases.
+              </p>
             </section>
           ) : null}
 
@@ -206,6 +245,7 @@ export default function MatchPage() {
             .
           </p>
         </div>
+        </GatedFeature>
       </PageShell>
     </ApplyFlowChrome>
   );

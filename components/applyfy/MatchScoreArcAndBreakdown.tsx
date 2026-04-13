@@ -4,11 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { ScoreArc } from "./ScoreArc";
 import type { Analysis } from "@/lib/analysisTypes";
 
-function barFillClass(pct: number): string {
-  if (pct < 40) return "bg-[#ef4444]";
-  if (pct < 65) return "bg-[#f59e0b]";
-  return "bg-[#10b981]";
-}
+type BarCategory = "skills" | "experience" | "education" | "keywords";
+
+const BAR_COLORS: Record<BarCategory, { bar: string; icon: string; glow: string }> = {
+  skills:     { bar: "bg-gradient-to-r from-[#ef4444] to-[#f87171]", icon: "bg-red-50 text-red-500",    glow: "shadow-[0_0_8px_rgba(239,68,68,0.3)]" },
+  experience: { bar: "bg-gradient-to-r from-[#6d28d9] to-[#a78bfa]", icon: "bg-violet-50 text-violet-600", glow: "shadow-[0_0_8px_rgba(109,40,217,0.3)]" },
+  education:  { bar: "bg-gradient-to-r from-[#059669] to-[#34d399]", icon: "bg-emerald-50 text-emerald-600", glow: "shadow-[0_0_8px_rgba(5,150,105,0.3)]" },
+  keywords:   { bar: "bg-gradient-to-r from-[#d97706] to-[#fbbf24]", icon: "bg-amber-50 text-amber-600",  glow: "shadow-[0_0_8px_rgba(217,119,6,0.3)]" },
+};
 
 function IconWrench({ className }: { className?: string }) {
   return (
@@ -48,34 +51,37 @@ function ScoreBreakdownBar({
   label,
   value,
   icon,
+  category,
   delayMs,
   animate,
 }: {
   label: string;
   value: number;
   icon: React.ReactNode;
+  category: BarCategory;
   delayMs: number;
   animate: boolean;
 }) {
   const pct = Math.min(100, Math.max(0, Math.round(value)));
+  const colors = BAR_COLORS[category];
   return (
     <div className="flex gap-3">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f1f5f9] text-[#64748b]">
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${colors.icon} ${colors.glow}`}>
         {icon}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-[#0f172a]">{label}</span>
-          <span className="shrink-0 text-sm font-semibold tabular-nums text-[#0f172a]">
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-[#0f172a]">{label}</span>
+          <span className="shrink-0 text-sm font-bold tabular-nums text-[#0f172a]">
             {pct}%
           </span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-[#f1f5f9]">
+        <div className="h-2.5 overflow-hidden rounded-full bg-[#f1f5f9]">
           <div
-            className={`h-full rounded-full ${barFillClass(pct)}`}
+            className={`h-full rounded-full ${colors.bar}`}
             style={{
               width: animate ? `${pct}%` : "0%",
-              transition: `width 1s ease-out ${delayMs}ms`,
+              transition: `width 1s cubic-bezier(0.22, 1, 0.36, 1) ${delayMs}ms`,
             }}
           />
         </div>
@@ -120,6 +126,7 @@ export function MatchScoreArcAndBreakdown({ analysis }: { analysis: Analysis }) 
             label="Skills match"
             value={analysis.skillsMatch}
             icon={<IconWrench className="h-4 w-4" />}
+            category="skills"
             delayMs={0}
             animate={barsOn}
           />
@@ -127,6 +134,7 @@ export function MatchScoreArcAndBreakdown({ analysis }: { analysis: Analysis }) 
             label="Experience level"
             value={analysis.experienceMatch}
             icon={<IconClock className="h-4 w-4" />}
+            category="experience"
             delayMs={150}
             animate={barsOn}
           />
@@ -134,6 +142,7 @@ export function MatchScoreArcAndBreakdown({ analysis }: { analysis: Analysis }) 
             label="Education fit"
             value={analysis.educationMatch}
             icon={<IconGrad className="h-4 w-4" />}
+            category="education"
             delayMs={300}
             animate={barsOn}
           />
@@ -141,6 +150,7 @@ export function MatchScoreArcAndBreakdown({ analysis }: { analysis: Analysis }) 
             label="Keywords alignment"
             value={analysis.atsScore}
             icon={<IconKey className="h-4 w-4" />}
+            category="keywords"
             delayMs={450}
             animate={barsOn}
           />

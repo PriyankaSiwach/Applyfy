@@ -169,7 +169,11 @@ function insertAt(plain: string, index: number, chunk: string): string {
   return plain.slice(0, i) + chunk + plain.slice(i);
 }
 
-/** Append a bullet sentence after Skills header, or after latest role / end. */
+/**
+ * Append a bullet after Skills / latest role. Prefer replacing existing lines
+ * with `findAndReplaceInResumeEditor` for AI-assisted edits so content stays
+ * traceable to the candidate’s real resume.
+ */
 export function appendSentenceToResume(plain: string, sentence: string): string {
   const s = sentence.trim();
   if (!s) return plain;

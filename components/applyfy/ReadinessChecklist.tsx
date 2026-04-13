@@ -32,7 +32,7 @@ export function ReadinessChecklist({ analysis }: { analysis: Analysis }) {
   };
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5">
+    <div className="rounded-2xl border border-[#e8e0f5] bg-gradient-to-b from-[var(--bg-card)] to-[#faf8ff] p-6 shadow-[0_8px_28px_-10px_rgba(124,58,237,0.1)]">
       <p className="font-[family-name:var(--font-plus-jakarta)] text-lg font-bold text-[var(--text-primary)]">
         Ready to apply?
       </p>

@@ -19,7 +19,11 @@ function collectRewriteMatches(plain: string, analysis: Analysis): MatchSeg[] {
   const raw: MatchSeg[] = [];
   for (const r of analysis.rewrites.slice(0, 12)) {
     const o = r.original.trim();
+    const w = r.rewritten.trim();
     if (o.length < 10) continue;
+    const oNorm = o.replace(/\s+/g, " ");
+    const wNorm = w.replace(/\s+/g, " ");
+    if (wNorm === oNorm) continue;
     let idx = plain.indexOf(o);
     if (idx === -1) {
       const pl = plain.toLowerCase();
@@ -30,8 +34,9 @@ function collectRewriteMatches(plain: string, analysis: Analysis): MatchSeg[] {
       raw.push({
         start: idx,
         end: idx + o.length,
-        suggestion:
-          r.whyBetter || "Strengthen this line using the suggested rewrite.",
+        suggestion: `${r.alreadyCoversSkill ? "Already covers this skill — optional polish. " : ""}${
+          r.whyBetter || "Strengthen this line using the suggested rewrite."
+        }`,
         replacement: r.rewritten,
       });
     }
@@ -101,7 +106,7 @@ export function buildResumeEditorHtml(plain: string, analysis: Analysis | null):
         if (m.end <= m.start) continue;
         inner += escapeHtml(line.slice(i, m.start));
         const seg = line.slice(m.start, m.end);
-        inner += `<span class="resume-editor-hl" data-replacement="${escapeHtml(m.replacement)}" data-suggestion="${escapeHtml(m.suggestion)}">${escapeHtml(seg)}</span>`;
+        inner += `<span class="resume-editor-hl" contenteditable="false" data-replacement="${escapeHtml(m.replacement)}" data-suggestion="${escapeHtml(m.suggestion)}">${escapeHtml(seg)}</span>`;
         i = m.end;
       }
       inner += escapeHtml(line.slice(i));

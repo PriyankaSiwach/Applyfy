@@ -12,9 +12,8 @@ function scoreGradientId(score: number): string {
 function centerColor(score: number): string {
   const pct = Math.min(100, Math.max(0, score));
   if (pct < 50) return "#ef4444";
-  if (pct < 70) return "#f59e0b";
-  if (pct < 85) return "#1a56db";
-  return "#10b981";
+  if (pct < 70) return "#d97706";
+  return "#059669";
 }
 
 export function ScoreArc({ score }: { score: number }) {
@@ -64,12 +63,12 @@ export function ScoreArc({ score }: { score: number }) {
             <stop offset="100%" stopColor="#f97316" />
           </linearGradient>
           <linearGradient id="arcGradMid" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#f59e0b" />
-            <stop offset="100%" stopColor="#eab308" />
+            <stop offset="0%" stopColor="#f97316" />
+            <stop offset="100%" stopColor="#fbbf24" />
           </linearGradient>
           <linearGradient id="arcGradHigh" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#1a56db" />
-            <stop offset="100%" stopColor="#10b981" />
+            <stop offset="0%" stopColor="#059669" />
+            <stop offset="100%" stopColor="#34d399" />
           </linearGradient>
         </defs>
         <circle
@@ -91,7 +90,7 @@ export function ScoreArc({ score }: { score: number }) {
           strokeDasharray={c}
           strokeDashoffset={dashOffset}
           style={{
-            transition: "stroke-dashoffset 1.5s ease-out",
+            transition: "stroke-dashoffset 1s ease-out",
           }}
         />
       </svg>
@@ -158,12 +157,12 @@ export function ScoreArcOutOfTen({ score }: { score: number }) {
             <stop offset="100%" stopColor="#f97316" />
           </linearGradient>
           <linearGradient id={`arcGradMid-${idSuffix}`} x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#f59e0b" />
-            <stop offset="100%" stopColor="#eab308" />
+            <stop offset="0%" stopColor="#f97316" />
+            <stop offset="100%" stopColor="#fbbf24" />
           </linearGradient>
           <linearGradient id={`arcGradHigh-${idSuffix}`} x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#1a56db" />
-            <stop offset="100%" stopColor="#10b981" />
+            <stop offset="0%" stopColor="#059669" />
+            <stop offset="100%" stopColor="#34d399" />
           </linearGradient>
         </defs>
         <circle
@@ -185,7 +184,7 @@ export function ScoreArcOutOfTen({ score }: { score: number }) {
           strokeDasharray={c}
           strokeDashoffset={dashOffset}
           style={{
-            transition: "stroke-dashoffset 1.5s ease-out",
+            transition: "stroke-dashoffset 1s ease-out",
           }}
         />
       </svg>

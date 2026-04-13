@@ -1,3 +1,6 @@
+import { auth, clerkClient } from "@clerk/nextjs/server";
+
+import { mergeClerkPublicMetadata } from "@/lib/clerkStripeSync";
 import {
   fetchJobDescriptionFromUrlWithDetails,
   JOB_FETCH_MIN_MEANINGFUL_CHARS,
@@ -9,6 +12,17 @@ import { jsonNoStore } from "@/lib/jsonResponseNoStore";
 import { parseAnalyzeBody } from "@/lib/parseAnalyzeBody";
 import { resumeTextFingerprint } from "@/lib/resumeFingerprint";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
+import { RESUME_REWRITE_HONESTY_SYSTEM } from "@/lib/prompts/resumeRewriteHonesty";
+import {
+  padRewritesToSix,
+  sanitizeAnalyzeRewrites,
+} from "@/lib/sanitizeAnalyzeRewrites";
+import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
+import {
+  FREE_ANALYSIS_SCAN_LIMIT,
+  isAdminBypassEmail,
+  tierFromPublicMetadata,
+} from "@/lib/tier";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,9 +30,9 @@ export const fetchCache = "force-no-store";
 /** Vercel / Next.js: allow long OpenAI + scrape (see vercel.json too). */
 export const maxDuration = 60;
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-4o";
+
 /** Abort OpenAI request after this many ms (matches maxDuration budget). */
 const OPENAI_FETCH_TIMEOUT_MS = 60_000;
 
@@ -54,71 +68,124 @@ function summarizeOpenAIResult(result: Record<string, unknown>) {
   };
 }
 
-const ANALYZE_SYSTEM = `You are a brutally honest ATS expert and resume writer with 15 years of FAANG recruiting experience. Analyze this resume against this job posting.
+const ANALYZE_ANALYSIS_SYSTEM_APPEND = `PART 2 — Full JSON analysis (same response):
+You must return one JSON object exactly as described in the user message: keywords (semantic matching), matchedStrengths, gaps, rewrites, atsScore, experienceMatch, educationMatch, quickWins, intro, starStories.
 
-Resume: {resumeText}
-Job Posting: {jobText}
+Target ATS themes come from the job posting in the user message — not from inventing resume content. Keywords in JSON must be **grounded in the posting text**: each \`skill\` string must appear in the job posting (case-insensitive), as a contiguous phrase or clear single-token match — never invent unrelated domains (e.g. do not output "cloud computing", "machine learning", or data/tech stacks unless those words appear in the posting).
+
+For the \`rewrites\` array: PART 1 (resume editor HARD RULES in the earlier system message) overrides everything else. Never "add missing keywords" by creating new lines or skill/tool lists. Each item must be one existing line (or same line count as that line) rewritten in place — not new resume content.
+
+---
+
+You are an expert ATS resume analyzer with deep hiring experience. When evaluating keyword matches:
+- Use SEMANTIC matching, not literal string matching.
+- A keyword is PRESENT if the resume contains direct evidence, related tools, equivalent terminology, or behavioral proof of that skill.
+- A keyword is MISSING only if there is zero evidence — direct or indirect — anywhere on the resume.
+- For soft skills, look for behavioral examples, not just the exact phrase.
+- Do NOT cap the number of matched strengths — return ALL matches found (see user task: one strength line per matched keyword, in order).
+- Score gaps honestly: only flag as a gap if truly absent with no proxy evidence.
+- When suggesting fixes, reference specific resume content and explain exactly how to reframe it to cover the gap.
+
+Skill clusters (treat as semantic support when the job uses the umbrella label):
+- Data / quantitative stack: NumPy, Matplotlib, pandas, scipy, similar tooling or coursework can support job phrases like "Statistical Methods" or "Data Analysis" when the resume shows that work.
+- Problem solving / analytical thinking: productivity improvements, error reduction, streamlined workflows, debugging, root-cause analysis, or measurable process wins count — even if the words "problem solving" never appear.
+- Leadership / collaboration: managing, coordinating, leading, mentoring, cross-functional delivery, or strong team project outcomes can support "Technical Leadership" or similar when aligned with the posting.
+
+Soft skills pass (apply when scoring keywords and gaps):
+- Communication: mentoring, teaching, presenting, stakeholder updates, documentation for others, cross-functional collaboration.
+- Leadership: managed, led, coordinated, owned initiatives, mentored others.
+- Project management: timelines, deliverables, sprints, milestones, roadmaps, coordinated releases.
+Never mark a soft-skill-style requirement as missing if clear behavioral evidence exists anywhere on the resume.`;
+
+const ANALYZE_SYSTEM_PROMPT = `${RESUME_REWRITE_HONESTY_SYSTEM}
+
+---
+
+${ANALYZE_ANALYSIS_SYSTEM_APPEND}`;
+
+const STRICT_REWRITE_RETRY_SUFFIX = `
+
+CRITICAL — REGENERATE THE ENTIRE JSON AGAIN.
+Your previous output likely violated rewrite rules (fabricated "Tools:", "Soft Skills:", "Domain knowledge:", "Data & analytics:", "Operations & logistics:", ERP/NetSuite/SAP/Oracle not on the resume, comma-separated fake skill rows, or extra lines). 
+
+For rewrites ONLY:
+- Each "original" must be an exact substring from the resume above.
+- Each "rewritten" must have at most 2 more non-empty lines than "original" (same structure).
+- Never add labeled lists (Tools:, Soft skills:, Domain knowledge:, etc.) unless that exact label already appears on that original line.
+- Never introduce tools, vendors, or domains not present in that original line.
+- If you cannot honestly rewrite a line, set rewritten equal to original and explain in whyBetter.`;
+
+const ANALYZE_USER_TASK = `Resume:
+{resumeText}
+
+Job posting:
+{jobText}
 
 Return JSON with exactly these keys:
 
 'keywords': array of 12 objects {skill, found, evidence}
-- Extract the most critical skills from the job (short labels only, 1-3 words)
-- found: true only if clearly demonstrated in resume, not just listed as a keyword
+- Extract only real skills, technologies, tools, and job-relevant competencies that **appear in the job posting text** (each \`skill\` must be findable verbatim in the posting, case-insensitive — no invented or cross-domain terms from other industries).
+- Short labels, 1-4 words each, copied or tightly quoted from the posting.
+- Skip any text that is clearly a form field label or template artifact: e.g. "Job competency N", "Requirement N", "Competency #3", or any numbered placeholder pattern — never copy those as skill names.
+- Mix technical terms and soft skills **only when those exact phrases or words appear in the posting**.
+- Apply SEMANTIC matching: found=true if the resume shows the capability through direct terms, related tools, equivalent phrasing, or clear behavioral proof anywhere in the resume.
+- found=false only when there is no reasonable proxy or evidence.
 - evidence: exactly ONE sentence for the requirements table "Your resume" column for THIS row only. Must be unique across all 12 rows — never reuse the same wording.
-  - If found is true: cite concrete proof from the resume (project name, metric, company/role, or bullet) that shows this requirement.
-  - If found is false: name the closest thing on the resume toward this requirement, OR one honest sentence on why the resume falls short for this specific skill — still tied to this resume, not generic advice.
+  - If found is true: cite concrete proof (project, metric, role, tool, or behavior) that semantically satisfies the requirement.
+  - If found is false: name the closest related content on the resume, OR one honest sentence on why nothing suffices — still tied to this resume, not generic advice. If there is genuinely no basis to claim the skill, say clearly that it cannot be honestly added without fabrication or new real experience (e.g. "Cannot be added — no supporting experience" or equivalent honest wording).
 - Forbidden: vague boilerplate, repeated phrases across rows, or the exact text "Not clearly demonstrated in the resume text" (or close paraphrases of that phrase).
 
-'matchedStrengths': array of 4 strings
-- Each string MUST follow this format exactly (use em dashes — as separators, three parts only):
-  "[Skill] — [specific project or experience from the resume that proves it] — [why this is relevant to this specific job posting]"
+'matchedStrengths': array of strings (no maximum length)
+- Include EXACTLY one entry for EVERY keyword row where found is true, in the SAME ORDER as those rows appear in the keywords array (omit entries for rows where found is false).
+- Each string MUST use this format (em dashes — as separators, three parts only):
+  "[Skill or job label] — [specific project or experience from the resume that proves it] — [why this is relevant to this specific job posting]"
 - Example: "AWS serverless — Built a zero-cost URL shortener using Lambda, API Gateway, and DynamoDB — directly matches the job's emphasis on scalable cloud infrastructure"
-- Never output a skill name alone; every line must name a concrete resume item (project, role, metric, or bullet) AND tie relevance to a specific requirement or theme from the job posting text.
+- Never output a skill name alone; every line must name concrete resume content AND tie relevance to the job.
+- If 9 keywords match semantically, return 9 lines — do not truncate.
 
 'gaps': array of 5-6 objects {skill, reality, fix}
-- skill: the missing requirement
-- reality: one honest sentence on what the resume currently shows for this skill (never say 'no mention' — find the closest thing)
-- fix: one sentence on how to address it using what already exists in the resume
+- skill: the missing requirement (only if truly missing after semantic check)
+- reality: one honest sentence on what the resume currently shows toward this skill (never say 'no mention' — find the closest thing)
+- fix: one sentence that NEVER recommends inventing tools, employers, skills, domains, or experience. Only suggest reframing existing true bullets, verifiable next steps (real projects, certifications), or honest acknowledgment that the gap cannot be closed without new experience.
 
-'rewrites': array of 6 objects {
-  original, rewritten, section, whyBetter}
-- Find 6 existing bullet points or lines from the resume that can be improved
-- original: the exact current text from resume
-- rewritten: stronger version of the SAME experience — do NOT invent new experiences, do NOT add new job roles, do NOT fabricate skills. Only paraphrase and strengthen what is already there. Add metrics if implied. Weave in ATS keywords naturally where they genuinely fit the existing experience.
-- section: where this line currently lives in the resume (e.g. 'MoMA Experience', 'AWS Project', 'Skills section')
-- whyBetter: one sentence explaining what the rewrite improves
+'rewrites': array of 6 objects { original, rewritten, section, whyBetter, alreadyCoversSkill }
+Follow the resume editor HARD RULES in the system message (PART 1). Do NOT "improve the resume" by adding skills, tools, or new lines.
+- Pick 6 existing lines or bullets already in the resume text above.
+- original: exact verbatim substring from the resume.
+- rewritten: stronger wording of ONLY that line's facts; non-empty line count must not exceed original's by more than 2.
+- Forbidden unless the original line already matches the same pattern: labeled rows like "Tools:", "Domain knowledge:", "Data & analytics:", "Operations & logistics:", "Soft skills:", or any "Label: skill A, skill B" comma inventory.
+- Do NOT add missing keywords unless the original line already supports them semantically.
+- alreadyCoversSkill: boolean when the line already matches the job theme; then light polish only.
+- section: where the line lives.
+- whyBetter: one sentence; if a keyword cannot be honestly woven, say so.
 
 'atsScore': integer 0-100
-- Score only the keyword and phrasing alignment of the resume as-is against the job posting
-- Separate from match score — this is purely about language and ATS optimization
-- Also used in the UI as "Keywords alignment" in the match breakdown
+- Keyword and phrasing alignment of the resume as-is against the job, using SEMANTIC interpretation (not substring hunting)
+- Separate from match score — used as "Keywords alignment" in the match breakdown
 
 'experienceMatch': integer 0-100
-- Alignment of years of experience, seniority, and relevance of past roles vs this posting's expectations
+- Years of experience, seniority, and relevance of past roles vs this posting
 
 'educationMatch': integer 0-100
-- How well degrees, fields of study, and certifications match what the job asks for (including reasonable equivalents)
+- Degrees, fields of study, certifications vs the job (including reasonable equivalents)
 
 'quickWins': array of 3 strings
-- The 3 fastest changes the user can make right now that will have the biggest impact
-- Each must be specific and actionable in under 5 minutes
+- Fast, high-impact changes; specific and actionable in under 5 minutes
 
 'intro': string
-- A single 30-second interview self-introduction the candidate can read aloud. Natural spoken English.
+- ~30-second spoken self-introduction; natural English, 4-5 sentences, one flowing paragraph (25-35 seconds aloud)
+- Specifically tailored to THIS job posting: (1) open with the candidate's background in the relevant functional area — NOT the job title verbatim, but the domain (e.g. "mobile engineering", "financial reporting"); (2) cite one concrete piece of resume experience that directly maps to the top requirement in this posting; (3) name what draws them to this type of role or the company's focus area as described in the JD; (4) close with a short transition into the conversation
+- Every sentence must be grounded in both the candidate's resume AND this specific job description — never generic filler
 
 'starStories': array of exactly 4 objects { title, S, T, A, R }
-- Four distinct STAR stories from specific roles, projects, or accomplishments on the resume (not generic advice).
-- Fill in every S, T, A, R field with specific real content from the resume. Never leave any field as a generic instruction or template. T = the specific goal of that project/role. A = specific actions the candidate took. R = the specific outcome or metric achieved.
+- Four distinct STAR stories from the resume; every field filled with real content from the resume
 
 Return only valid JSON. No markdown.
 
 CRITICAL FORMATTING RULES:
-- intro must be maximum 5 sentences total. It should take exactly 25-35 seconds to read aloud. Do not use paragraph breaks. Write it as one flowing paragraph.
+- intro must be maximum 5 sentences total, one flowing paragraph (25-35 seconds aloud).
 
-- Every fullAnswer must be written as a complete natural paragraph the candidate can actually say or adapt. No dashes or structured data patterns. Write it as if coaching someone on exactly what to say, in first person. Each should be about six to seven sentences and sound natural when read aloud.
-
-- Bad format (for fullAnswer only): 'Java — built X — shows Y' as a stub; use full natural paragraphs instead.
-- Good format (for fullAnswer): 'In my project work, I built X using Java which directly demonstrates Y'
+- Every fullAnswer (if you output interview fields elsewhere) must be a complete natural paragraph in first person, six to seven sentences, speakable aloud — no em-dash skill stubs.
 
 All text fields must read like a human wrote them for a human to speak aloud, except matchedStrengths which must use the exact three-part em-dash structure defined above.`;
 
@@ -163,36 +230,29 @@ function extractJsonObject(
   throw new Error("Could not parse JSON from model response");
 }
 
-async function runAnalyzeOpenAI({
-  resume,
-  jobDescription,
-}: {
-  resume: string;
-  jobDescription: string;
-}) {
-  const resumeSlice = resume.slice(0, ANALYZE_MAX_RESUME_CHARS);
-  const jobSlice = jobDescription.slice(0, ANALYZE_MAX_JOB_CHARS);
-  const userContent = ANALYZE_SYSTEM.replace(
-    "{resumeText}",
-    resumeSlice,
-  ).replace("{jobText}", jobSlice);
-
+async function fetchAnalyzeJsonObject(
+  apiKey: string,
+  userContent: string,
+): Promise<Record<string, unknown>> {
   let completion: Response;
   try {
     completion = await fetch(OPENAI_API_URL, {
       method: "POST",
       cache: "no-store",
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(OPENAI_FETCH_TIMEOUT_MS),
       body: JSON.stringify({
         model: OPENAI_MODEL,
         response_format: { type: "json_object" },
-        messages: [{ role: "user", content: userContent }],
+        messages: [
+          { role: "system", content: ANALYZE_SYSTEM_PROMPT },
+          { role: "user", content: userContent },
+        ],
         max_tokens: 8192,
-        temperature: 0.4,
+        temperature: 0,
       }),
     });
   } catch (e) {
@@ -233,18 +293,57 @@ async function runAnalyzeOpenAI({
   };
   const content = wrapped.choices?.[0]?.message?.content ?? "";
 
-  console.log("[/api/analyze] OpenAI assistant message", {
-    contentLength: content.length,
-    contentPreview: content.slice(0, 500),
-    resumeCharsUsed: resumeSlice.length,
-    jobCharsUsed: jobSlice.length,
-  });
+  return extractJsonObject(content, "/api/analyze");
+}
 
-  const obj = extractJsonObject(content, "/api/analyze");
+async function runAnalyzeOpenAI({
+  apiKey,
+  resume,
+  jobDescription,
+}: {
+  apiKey: string;
+  resume: string;
+  jobDescription: string;
+}) {
+  const resumeSlice = resume.slice(0, ANALYZE_MAX_RESUME_CHARS);
+  const jobSlice = jobDescription.slice(0, ANALYZE_MAX_JOB_CHARS);
+  const userBase = ANALYZE_USER_TASK.replace(
+    "{resumeText}",
+    resumeSlice,
+  ).replace("{jobText}", jobSlice);
 
-  console.log("[/api/analyze] Parsed model JSON", {
+  let obj = await fetchAnalyzeJsonObject(apiKey, userBase);
+
+  console.log("[/api/analyze] OpenAI assistant message (pass 1)", {
     keys: Object.keys(obj).sort(),
     ...summarizeOpenAIResult(obj),
+  });
+
+  let san = sanitizeAnalyzeRewrites(obj.rewrites, resumeSlice);
+  if (san.needsRetry) {
+    console.warn("[/api/analyze] rewrite sanitize triggered retry", san.notes);
+    obj = await fetchAnalyzeJsonObject(
+      apiKey,
+      userBase + STRICT_REWRITE_RETRY_SUFFIX,
+    );
+    console.log("[/api/analyze] OpenAI pass 2", {
+      keys: Object.keys(obj).sort(),
+      ...summarizeOpenAIResult(obj),
+    });
+    san = sanitizeAnalyzeRewrites(obj.rewrites, resumeSlice);
+    if (san.notes.length) {
+      console.warn("[/api/analyze] rewrite sanitize after retry", san.notes);
+    }
+  }
+
+  const padded = padRewritesToSix(san.rewrites, resumeSlice);
+  obj.rewrites = padded;
+
+  console.log("[/api/analyze] Final parsed model JSON", {
+    keys: Object.keys(obj).sort(),
+    ...summarizeOpenAIResult(obj),
+    resumeCharsUsed: resumeSlice.length,
+    jobCharsUsed: jobSlice.length,
   });
 
   return {
@@ -280,11 +379,49 @@ export async function POST(request: Request) {
   }
   const analyzeInput = parsed;
 
-  if (!OPENAI_API_KEY) {
-    return jsonNoStore(
-      { error: "Missing OPENAI_API_KEY on the server" },
-      { status: 503 },
-    );
+  const keyCheck = requireOpenAiApiKey();
+  if (!keyCheck.ok) {
+    return jsonNoStore({ error: keyCheck.error }, { status: 503 });
+  }
+  const openaiKey = keyCheck.key;
+
+  const { userId } = await auth();
+  if (userId) {
+    try {
+      const c = await clerkClient();
+      const user = await c.users.getUser(userId);
+      const primaryEmail =
+        user.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)
+          ?.emailAddress ?? null;
+      const reqHost =
+        request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ??
+        request.headers.get("host") ??
+        null;
+      if (!isAdminBypassEmail(primaryEmail, reqHost)) {
+        const tier = tierFromPublicMetadata(
+          user.publicMetadata as Record<string, unknown>,
+        );
+        if (tier === "free") {
+          const used = Number(
+            (user.publicMetadata as Record<string, unknown>).analysisScanCount ??
+              0,
+          );
+          const u = Number.isFinite(used) ? used : 0;
+          if (u >= FREE_ANALYSIS_SCAN_LIMIT) {
+            return jsonNoStore(
+              {
+                error:
+                  "You've used all 3 free scans. Upgrade to Pro for unlimited analyses.",
+                code: "FREE_SCAN_LIMIT",
+              },
+              { status: 402 },
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[/api/analyze] tier/scan check", e);
+    }
   }
 
   type JobResolveOk = { ok: true; text: string; jobLink: string | null };
@@ -381,6 +518,7 @@ export async function POST(request: Request) {
   try {
     const tAi0 = Date.now();
     const result = await runAnalyzeOpenAI({
+      apiKey: openaiKey,
       resume: resumeText,
       jobDescription,
     });
@@ -393,6 +531,25 @@ export async function POST(request: Request) {
       resumeLen: resumeText.length,
       ...summarizeOpenAIResult(result),
     });
+    if (userId) {
+      try {
+        const c = await clerkClient();
+        const user = await c.users.getUser(userId);
+        const tier = tierFromPublicMetadata(
+          user.publicMetadata as Record<string, unknown>,
+        );
+        if (tier === "free") {
+          const prev = Number(
+            (user.publicMetadata as Record<string, unknown>)
+              .analysisScanCount ?? 0,
+          );
+          const next = (Number.isFinite(prev) ? prev : 0) + 1;
+          await mergeClerkPublicMetadata(userId, { analysisScanCount: next });
+        }
+      } catch (e) {
+        console.error("[/api/analyze] increment analysisScanCount", e);
+      }
+    }
     return jsonNoStore({
       ...result,
       resolvedJobPosting: jobDescription,

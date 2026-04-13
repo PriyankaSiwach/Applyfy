@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { type ReactNode } from "react";
 
-export type FeatureLockTier = "pro" | "pro_plus";
+export type FeatureLockTier = "pro" | "premium";
+
+const PUNCHY: Record<FeatureLockTier, string> = {
+  pro: "Unlock with Pro — see your full analysis",
+  premium: "Unlock with Premium",
+};
 
 export function FeatureLock({
   locked,
@@ -14,9 +19,7 @@ export function FeatureLock({
   className = "",
 }: {
   locked: boolean;
-  /** Which upgrade unlocks this feature. */
   tier?: FeatureLockTier;
-  /** Overrides default "Pro feature" / "Pro+ feature". */
   featureTitle?: string;
   description: string;
   children: ReactNode;
@@ -26,57 +29,45 @@ export function FeatureLock({
     return <div className={className}>{children}</div>;
   }
 
-  const title =
-    featureTitle ??
-    (tier === "pro_plus" ? "Pro+ feature" : "Pro feature");
-
-  const cta =
-    tier === "pro_plus" ? "Upgrade to Pro+" : "Upgrade to Pro";
+  const cta = tier === "premium" ? "Upgrade to Premium" : "Upgrade to Pro";
+  const tagline = PUNCHY[tier];
+  void featureTitle; // kept in props for external callers
 
   return (
-    <div className={`relative ${className}`}>
+    <div
+      className={`group relative overflow-hidden ${className}`}
+      title={tier === "premium" ? description : undefined}
+    >
+      {/* Blurred content */}
       <div
-        className="select-none blur-[5px] [user-select:none] [&_*]:pointer-events-none [&_*]:select-none"
+        className="pointer-events-none select-none [filter:blur(4px)] [user-select:none] [&_*]:pointer-events-none [&_*]:select-none"
         aria-hidden
       >
         {children}
       </div>
-      <div className="absolute inset-0 z-10 flex items-center justify-center p-4 [animation:fade-in-up_0.3s_ease-out_forwards]">
-        <div
-          className="max-w-[280px] rounded-2xl border border-[var(--border)] px-8 py-7 text-center shadow-lg backdrop-blur-[8px]"
-          style={{
-            backgroundColor:
-              "color-mix(in srgb, var(--bg-card) 96%, transparent)",
-          }}
+
+      {/* Gradient fade at the bottom */}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-20 rounded-b-[inherit]"
+        style={{
+          background:
+            "linear-gradient(to top, color-mix(in srgb, var(--bg-card, #fff) 92%, transparent) 0%, transparent 100%)",
+        }}
+        aria-hidden
+      />
+
+      {/* Always-visible CTA badge — sits at the bottom center */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex items-end justify-center">
+        <Link
+          href="/pricing"
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-[#7c3aed] px-4 py-1.5 text-xs font-semibold text-white shadow-[0_4px_16px_rgba(124,58,237,0.45)] transition-all duration-150 hover:bg-[#6d28d9]"
+          title={description}
         >
-          <svg
-            className="mx-auto mb-3 h-7 w-7 text-[var(--brand)]"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-            aria-hidden
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-            />
+          <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          <p className="text-base font-bold text-[var(--text-primary)]">
-            {title}
-          </p>
-          <p className="mt-1.5 text-sm leading-[1.5] text-[var(--text-secondary)]">
-            {description}
-          </p>
-          <Link
-            href="/pricing"
-            className="mt-4 inline-flex rounded-[10px] px-6 py-2.5 text-sm font-semibold text-white transition-all duration-200 ease-out hover:opacity-90"
-            style={{ background: "var(--gradient-hero)" }}
-          >
-            {cta}
-          </Link>
-        </div>
+          {tagline} · {cta}
+        </Link>
       </div>
     </div>
   );

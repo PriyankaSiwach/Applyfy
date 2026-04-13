@@ -8,58 +8,62 @@ import { PricingTierFeatures } from "./PricingTierFeatures";
 
 const faqs = [
   {
-    q: "Can I really use Applyfy for free forever?",
-    a: "Yes. Free never expires. You get 2 analyses/month, ATS score, keyword match, cover letter, and 3 interview questions — no credit card needed.",
+    q: "Can I really use Applyfy for free?",
+    a: "Yes. Free includes 3 resume+job analyses, ATS score, quick wins (top 3), full keyword chips, two visible matched strengths, and a tracker view (up to 3 saved jobs, view-only). Resume Editor, Match, Cover letter, and Interview prep require Pro.",
   },
   {
-    q: "What's the difference between Pro and Pro+?",
-    a: "Pro gives you everything to apply confidently — unlimited analyses, full gap analysis, all rewrites, cover letter downloads, and interview prep. Pro+ adds your personal AI career team: an interview simulator that scores your answers, a salary negotiation coach, LinkedIn optimizer, career coach chat, and bulk apply mode for when you're applying aggressively.",
+    q: "What's the difference between Pro and Premium?",
+    a: "Pro unlocks unlimited analyses, full Analyze (gaps, readiness, score history, follow-up email), Resume Editor, Match, Cover letter downloads, and core Interview prep. Premium adds the Interview Simulator with scoring, Salary Negotiation Coach, unlimited “more questions,” and the Interview follow-up email generator.",
   },
   {
     q: "Is the interview simulator actually useful?",
-    a: "Yes — you type or paste your answer to a behavioral question, and the AI scores it 1–10 on clarity, specificity, and use of the STAR method. It tells you exactly what was strong and what was missing. It's like a mock interview you can do at midnight.",
+    a: "Yes — you answer a behavioral question in your own words and get scores for clarity, specificity, and STAR structure, plus concrete improvement notes.",
   },
   {
-    q: "Can I cancel my Pro or Pro+ subscription anytime?",
-    a: "Absolutely. Cancel from your account settings — no forms, no phone calls. You keep access until the end of your billing period.",
+    q: "Can I cancel anytime?",
+    a: "Yes. Use Manage subscription (Stripe Customer Portal) from the header when you have an active subscription. You keep access through the end of the billing period.",
   },
   {
     q: "Is my resume data safe?",
-    a: "Your resume and job data are processed securely and never stored on our servers after your session ends. We don't sell or share your information.",
+    a: "Your resume and job data are processed securely. We don't sell your information.",
   },
   {
-    q: "What does the salary negotiation coach actually do?",
-    a: "Paste the job offer and the job description, and it generates a word-for-word negotiation script — what to say, what to ask for, and what the market rate is for that role and location. Most users recover the annual cost of Pro+ in a single negotiation.",
+    q: "What does the salary negotiation coach do?",
+    a: "Paste your offer details and context; it generates a practical negotiation script and framing you can adapt — Premium only.",
   },
   {
     q: "Do you offer refunds?",
-    a: "If you're not happy within the first 7 days of upgrading, contact us and we'll refund you — no questions asked.",
+    a: "If you're not happy within the first 7 days of upgrading, contact us for a refund.",
   },
 ] as const;
 
 export default function PricingPage() {
-  const { setTier } = useSubscription();
-  const [yearly, setYearly] = useState(false);
+  const { tier, mounted, setTier } = useSubscription();
   const [openFaq, setOpenFaq] = useState<number | null>(0);
-  const [priceBump, setPriceBump] = useState(false);
+  const [checkoutPlan, setCheckoutPlan] = useState<null | "pro" | "premium">(
+    null,
+  );
 
-  function selectBilling(next: boolean) {
-    if (next === yearly) return;
-    setYearly(next);
-    setPriceBump(true);
-    window.setTimeout(() => setPriceBump(false), 200);
+  async function startCheckout(plan: "pro" | "premium") {
+    setCheckoutPlan(plan);
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      const data = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok) {
+        console.error(data.error ?? "Checkout failed");
+        return;
+      }
+      if (data.url) window.location.href = data.url;
+    } catch {
+      /* ignore */
+    } finally {
+      setCheckoutPlan(null);
+    }
   }
-
-  const proMonthly = "14.99";
-  const proYearly = "11.99";
-  const proPlusMonthly = "29.00";
-  const proPlusYearly = "23.99";
-
-  const proDisplay = yearly ? proYearly : proMonthly;
-  const proPlusDisplay = yearly ? proPlusYearly : proPlusMonthly;
-
-  const proSaveYearly = (14.99 * 12 - 143.88).toFixed(2);
-  const proPlusSaveYearly = (29 * 12 - 287.88).toFixed(2);
 
   return (
     <main className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)] transition-colors duration-200 ease-out">
@@ -69,41 +73,11 @@ export default function PricingPage() {
             Pricing
           </p>
           <h1 className="mt-3 text-center font-[family-name:var(--font-plus-jakarta)] text-[52px] font-extrabold text-[var(--text-primary)]">
-            Simple, honest pricing.
+            Land the job. Not just the interview.
           </h1>
           <p className="mx-auto mt-3 max-w-lg text-center text-lg text-[var(--text-secondary)]">
             Start free. Upgrade when you&apos;re ready. Cancel anytime.
           </p>
-        </div>
-
-        <div className="mx-auto mt-8 flex justify-center opacity-0 [animation:fade-in-up_0.5s_ease-out_forwards] [animation-delay:80ms] [animation-fill-mode:forwards]">
-          <div
-            className="inline-flex rounded-full border border-[var(--border)] p-1 transition-all duration-200 ease-out"
-            role="group"
-            aria-label="Billing period"
-          >
-            <button
-              type="button"
-              onClick={() => selectBilling(false)}
-              className={`rounded-full px-5 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
-                !yearly ? "bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm" : "text-[var(--text-secondary)]"
-              }`}
-            >
-              Monthly
-            </button>
-            <button
-              type="button"
-              onClick={() => selectBilling(true)}
-              className={`rounded-full px-5 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
-                yearly ? "bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm" : "text-[var(--text-secondary)]"
-              }`}
-            >
-              Yearly
-              <span className="ml-2 rounded-full bg-[var(--green)] px-2 py-0.5 text-[10px] font-bold text-white">
-                Save 20%
-              </span>
-            </button>
-          </div>
         </div>
 
         <div className="mx-auto mt-12 flex max-w-[1100px] flex-col items-stretch gap-5 lg:flex-row lg:items-stretch lg:justify-center lg:py-4">
@@ -113,6 +87,11 @@ export default function PricingPage() {
             style={{ animationDelay: "0ms" }}
           >
             <p className="text-[12px] font-bold uppercase tracking-[0.1em] text-[var(--text-muted)]">Free forever</p>
+            {mounted && tier === "free" ? (
+              <p className="mt-2 inline-flex rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[var(--text-muted)]">
+                Current plan
+              </p>
+            ) : null}
             <p className="mt-2 font-[family-name:var(--font-plus-jakarta)] text-[52px] font-extrabold text-[var(--text-primary)]">
               $0
               <span className="text-[16px] font-normal text-[var(--text-muted)]">/month</span>
@@ -122,7 +101,7 @@ export default function PricingPage() {
             </p>
             <Link
               href="/my-application"
-              className="mt-6 flex h-12 w-full shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-card-hover)] text-[15px] font-semibold text-[var(--text-primary)] transition-all duration-200 ease-out hover:border-[var(--border-hover)] hover:brightness-[0.98] dark:hover:brightness-110"
+              className="mt-6 flex h-12 w-full shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-card-hover)] text-[15px] font-semibold text-[var(--text-primary)] transition-all duration-200 ease-out hover:border-[var(--border-hover)] hover:brightness-[0.98]"
             >
               Get started free
             </Link>
@@ -135,7 +114,7 @@ export default function PricingPage() {
 
           {/* Pro */}
           <div
-            className="relative z-10 flex min-h-0 flex-1 flex-col overflow-visible rounded-[24px] border-2 border-[var(--brand)] bg-gradient-to-br from-[#f5f3ff] to-[#ede9fe] p-9 opacity-0 shadow-[0_0_80px_rgba(107,140,255,0.15),0_24px_60px_rgba(0,0,0,0.18)] [animation:home-reveal_0.55s_ease-out_forwards] dark:from-[#1a1f3a] dark:to-[#16102e] lg:scale-[1.04]"
+            className="relative z-10 flex min-h-0 flex-1 flex-col overflow-visible rounded-[24px] border-2 border-[var(--brand)] bg-gradient-to-br from-[#f5f3ff] to-[#ede9fe] p-9 opacity-0 shadow-[0_0_80px_rgba(107,140,255,0.15),0_24px_60px_rgba(0,0,0,0.18)] [animation:home-reveal_0.55s_ease-out_forwards] lg:scale-[1.04]"
             style={{ animationDelay: "100ms" }}
           >
             <div
@@ -145,30 +124,41 @@ export default function PricingPage() {
               Most Popular
             </div>
             <p className="text-[12px] font-bold uppercase tracking-[0.1em] text-[var(--brand)]">Pro</p>
-            <p
-              className={`mt-2 font-[family-name:var(--font-plus-jakarta)] text-[52px] font-extrabold text-[var(--text-primary)] transition-all duration-200 ease-out ${
-                priceBump ? "scale-90 opacity-60" : "scale-100 opacity-100"
-              }`}
-            >
-              ${proDisplay}
-              <span className="text-[16px] font-normal text-[var(--text-muted)]">/month</span>
-            </p>
-            {yearly ? (
-              <p className="mt-1 text-[13px] font-medium text-[var(--green)]">
-                Billed $143.88/year · You save ${proSaveYearly}
+            {mounted && tier === "pro" ? (
+              <p className="mt-2 inline-flex rounded-full border border-[var(--brand)] bg-[var(--brand-tint)] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[#6d28d9]">
+                Current plan
               </p>
             ) : null}
+            <p className="mt-2 font-[family-name:var(--font-plus-jakarta)] text-[52px] font-extrabold text-[var(--text-primary)]">
+              $12
+              <span className="text-[16px] font-normal text-[var(--text-muted)]">/month</span>
+            </p>
             <p className="mt-2 text-[14px] leading-[1.5] text-[var(--text-secondary)]">
               Everything you need to apply with confidence.
             </p>
             <button
               type="button"
-              onClick={() => setTier("pro")}
-              className="mt-6 flex h-12 w-full shrink-0 items-center justify-center rounded-xl text-[15px] font-bold text-white shadow-[0_4px_20px_var(--brand-glow)] transition-all duration-200 ease-out hover:-translate-y-px hover:opacity-90"
+              onClick={() => void startCheckout("pro")}
+              disabled={checkoutPlan !== null || tier === "pro" || tier === "premium"}
+              className="mt-6 flex h-12 w-full shrink-0 items-center justify-center rounded-xl text-[15px] font-bold text-white shadow-[0_4px_20px_var(--brand-glow)] transition-all duration-200 ease-out hover:-translate-y-px hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               style={{ background: "var(--gradient-hero)" }}
             >
-              Start Pro
+              {checkoutPlan === "pro"
+                ? "Redirecting…"
+                : tier === "pro" || tier === "premium"
+                  ? "Subscribed"
+                  : "Subscribe"}
             </button>
+            <p className="mt-3 text-center text-[11px] text-[var(--text-muted)]">
+              Dev:{" "}
+              <button
+                type="button"
+                className="font-semibold text-[var(--brand)] underline"
+                onClick={() => setTier("pro")}
+              >
+                simulate Pro
+              </button>
+            </p>
             <div className="my-7 h-px shrink-0 bg-[var(--border)]" />
             <p className="mb-4 shrink-0 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--text-muted)]">
               What&apos;s included
@@ -176,43 +166,54 @@ export default function PricingPage() {
             <PricingTierFeatures tier="pro" variant="pro" />
           </div>
 
-          {/* Pro+ */}
+          {/* Premium */}
           <div
-            className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[rgba(245,158,11,0.4)] bg-gradient-to-br from-[#fdf8f0] to-[#fef3e2] p-9 opacity-0 shadow-[0_0_60px_rgba(245,158,11,0.08),0_20px_40px_rgba(0,0,0,0.15)] [animation:home-reveal_0.55s_ease-out_forwards] dark:from-[#1a1410] dark:to-[#1f1020]"
+            className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[rgba(245,158,11,0.4)] bg-gradient-to-br from-[#fdf8f0] to-[#fef3e2] p-9 opacity-0 shadow-[0_0_60px_rgba(245,158,11,0.08),0_20px_40px_rgba(0,0,0,0.15)] [animation:home-reveal_0.55s_ease-out_forwards]"
             style={{ animationDelay: "200ms" }}
           >
             <div className="absolute right-4 top-4 rounded-lg border border-[rgba(245,158,11,0.3)] bg-[rgba(245,158,11,0.12)] px-2.5 py-0.5 text-[11px] font-bold text-[#f59e0b]">
               ✦ Best value
             </div>
-            <p className="pr-24 text-[12px] font-bold uppercase tracking-[0.1em] text-[#f59e0b]">For serious job hunters</p>
-            <p
-              className={`mt-2 font-[family-name:var(--font-plus-jakarta)] text-[52px] font-extrabold text-[var(--text-primary)] transition-all duration-200 ease-out ${
-                priceBump ? "scale-90 opacity-60" : "scale-100 opacity-100"
-              }`}
-            >
-              ${proPlusDisplay}
-              <span className="text-[16px] font-normal text-[var(--text-muted)]">/month</span>
-            </p>
-            {yearly ? (
-              <p className="mt-1 text-[13px] font-medium text-[var(--green)]">
-                Billed $287.88/year · You save ${proPlusSaveYearly}
+            <p className="pr-24 text-[12px] font-bold uppercase tracking-[0.1em] text-[#f59e0b]">Premium</p>
+            {mounted && tier === "premium" ? (
+              <p className="mt-2 inline-flex rounded-full border border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[#b45309]">
+                Current plan
               </p>
             ) : null}
+            <p className="mt-2 font-[family-name:var(--font-plus-jakarta)] text-[52px] font-extrabold text-[var(--text-primary)]">
+              $24
+              <span className="text-[16px] font-normal text-[var(--text-muted)]">/month</span>
+            </p>
             <p className="mt-2 text-[14px] leading-[1.5] text-[var(--text-secondary)]">
-              Your personal AI career team. Land the role you actually want.
+              Simulator, salary coach, and unlimited interview extras.
             </p>
             <button
               type="button"
-              onClick={() => setTier("pro_plus")}
-              className="mt-6 flex h-12 w-full shrink-0 items-center justify-center rounded-xl border-none bg-[#0d0f14] text-[15px] font-bold text-white transition-all duration-200 ease-out hover:-translate-y-px hover:opacity-85 dark:bg-white dark:text-[#0d0f14]"
+              onClick={() => void startCheckout("premium")}
+              disabled={checkoutPlan !== null || tier === "premium"}
+              className="mt-6 flex h-12 w-full shrink-0 items-center justify-center rounded-xl border-none bg-[#0d0f14] text-[15px] font-bold text-white transition-all duration-200 ease-out hover:-translate-y-px hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Start Pro+
+              {checkoutPlan === "premium"
+                ? "Redirecting…"
+                : tier === "premium"
+                  ? "Subscribed"
+                  : "Subscribe"}
             </button>
+            <p className="mt-3 text-center text-[11px] text-[var(--text-muted)]">
+              Dev:{" "}
+              <button
+                type="button"
+                className="font-semibold text-[#f59e0b] underline"
+                onClick={() => setTier("premium")}
+              >
+                simulate Premium
+              </button>
+            </p>
             <div className="my-7 h-px shrink-0 bg-[var(--border)]" />
             <p className="mb-4 shrink-0 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--text-muted)]">
               What&apos;s included
             </p>
-            <PricingTierFeatures tier="pro_plus" variant="proplus" />
+            <PricingTierFeatures tier="premium" variant="premium" />
           </div>
         </div>
 

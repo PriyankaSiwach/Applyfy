@@ -11,28 +11,34 @@ export function extractJobTitleAndCompany(
     .filter(Boolean)
     .slice(0, 20);
 
-  let title = "";
+  // Use the more robust title extractor that checks labeled fields first
+  // ("Job Title:", "Position:", etc.) and guards against task descriptions.
+  const title = extractJobTitleFromPosting(jobPosting);
+
   let company = "";
 
-  for (const line of lines) {
-    if (!title && line.length >= 4 && line.length <= 90) {
-      if (
-        /engineer|developer|manager|analyst|designer|scientist|specialist|lead|intern|architect/i.test(
-          line,
-        )
-      ) {
-        title = line.replace(/^#+\s*/, "").trim();
-      }
-    }
+  // 1. Check labeled lines: "Company: Acme", "Employer: Acme", "Organization: Acme"
+  const allLines = jobPosting.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const companyLabelRe =
+    /^(?:company|employer|organization|hiring company|about\s+(?:the\s+)?company)\s*[:#\-–—]\s*(.+)$/i;
+  for (const line of allLines.slice(0, 50)) {
     if (!company) {
-      const m = line.match(
-        /\b(?:at|@|company[:\s])\s+([A-Z][A-Za-z0-9&.\- ]{1,50})/i,
-      );
-      if (m?.[1]) company = m[1].trim();
+      const m = line.match(companyLabelRe);
+      if (m?.[1]) {
+        company = m[1].trim().split(/[\n,|]/)[0]?.trim() ?? "";
+      }
     }
   }
 
-  if (!title) title = lines[0]?.replace(/^#+\s*/, "").trim() || "";
+  // 2. Loose "at / @ Company" pattern in first 20 lines
+  if (!company) {
+    for (const line of lines) {
+      const m = line.match(
+        /\b(?:at|@|company[:\s])\s+([A-Z][A-Za-z0-9&.\- ]{1,50})/i,
+      );
+      if (m?.[1]) { company = m[1].trim(); break; }
+    }
+  }
 
   if (!company) {
     company =
@@ -73,6 +79,7 @@ export function sanitizeJobTitle(input: string): string {
 /**
  * Extract only the job title from a full posting (not the first paragraph of the description).
  * Looks for labeled lines first, then short title-like lines before falling back conservatively.
+ * Final fallback: inline context phrases in flat text for newline-stripped postings.
  */
 export function extractJobTitleFromPosting(jobPosting: string): string {
   if (!jobPosting.trim()) return "";
@@ -81,6 +88,7 @@ export function extractJobTitleFromPosting(jobPosting: string): string {
     .map((l) => l.trim())
     .filter(Boolean);
 
+  // Pass 1: labeled fields — "Job Title: …", "Position: …", "Role: …", "Opening: …"
   const labelRe =
     /^(?:job\s*title|position|role|opening)\s*[:#\-–—]\s*(.+)$/i;
   for (const line of lines.slice(0, 40)) {
@@ -91,6 +99,7 @@ export function extractJobTitleFromPosting(jobPosting: string): string {
     }
   }
 
+  // Pass 2: short heading-style lines containing job title keywords
   for (const line of lines.slice(0, 18)) {
     const cleaned = line.replace(/^#+\s*/, "").replace(/^\*\s*/, "").trim();
     if (cleaned.length < 6 || cleaned.length > 90) continue;
@@ -111,6 +120,7 @@ export function extractJobTitleFromPosting(jobPosting: string): string {
     }
   }
 
+  // Pass 3: first-line fallback (short, non-prose lines)
   const first = lines[0]?.replace(/^#+\s*/, "").trim() ?? "";
   if (
     first.length >= 6 &&
@@ -122,6 +132,34 @@ export function extractJobTitleFromPosting(jobPosting: string): string {
     const head = first.split(/\s+[\|—–-]\s+/)[0]?.trim() ?? first;
     if (head.length >= 6 && head.split(/\s+/).length <= 10) {
       return sanitizeJobTitle(head);
+    }
+  }
+
+  // Pass 4: flat-text search — handles newline-stripped postings where the
+  // entire text arrives as one long line.  Searches inline context phrases that
+  // reliably bracket a job title in prose.
+  const flat = jobPosting.replace(/\s+/g, " ").trim();
+  const flatPatterns: RegExp[] = [
+    // "As a Software Android Engineer 2 (SWE2) at Intuit"
+    /\bAs\s+an?\s+((?:[A-Z][A-Za-z0-9]+(?:\s+[A-Z]?[A-Za-z0-9]+){0,6}))\s*(?:\([^)]{1,30}\))?\s*(?:at\s+[A-Z]|,\s*you|,\s*your|\s+you\s+will)/,
+    // "for the role of Senior Android Engineer"
+    /\bfor\s+the\s+(?:role|position)\s+of\s+(?:a\s+|an\s+)?([A-Za-z][A-Za-z0-9 ]{2,60}?)(?:\s*\([^)]{1,30}\))?\s*(?:at\s+[A-Z]|[,.]|\s+you\b|\s+to\s+join)/i,
+    // "hiring a/an Senior Accountant to"
+    /\bhiring\s+(?:a\s+|an\s+)([A-Za-z][A-Za-z0-9 ]{2,60}?)\s+to\s+(?:join|work|help)/i,
+    // "seeking a/an Software Engineer for"
+    /\bseeking\s+(?:a\s+|an\s+)([A-Za-z][A-Za-z0-9 ]{2,60}?)\s+(?:to\s+join|for\s+our|who)/i,
+    // "open role: Senior Data Analyst"
+    /\bopen\s+(?:role|position)[:\-–]\s*([A-Za-z][A-Za-z0-9 ]{2,60}?)(?:[,.]|$)/i,
+  ];
+  for (const re of flatPatterns) {
+    const m = flat.match(re);
+    if (m?.[1]) {
+      const candidate = m[1].trim();
+      const words = candidate.split(/\s+/).length;
+      if (words >= 1 && words <= 8 && candidate.length >= 4) {
+        const t = sanitizeJobTitle(candidate);
+        if (t) return t;
+      }
     }
   }
 

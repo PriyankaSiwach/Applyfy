@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import { useApplyfy } from "@/components/applyfy/ApplyfyProvider";
 import { useSubscription } from "@/components/subscription/SubscriptionProvider";
+
+const MISSING_META_ERROR = "MISSING_JOB_META";
 
 export function CoverLetterPanel() {
   const { isPro } = useSubscription();
@@ -17,12 +19,23 @@ export function CoverLetterPanel() {
     coverLetter,
     coverLetterError,
     copyCoverLetter,
-    downloadCoverLetterTxt,
     regenerateCoverLetter,
+    regenerateCoverLetterWithMeta,
     setCoverLetterDraft,
   } = useApplyfy();
 
   const [regenSpin, setRegenSpin] = useState(false);
+  const [metaTitle, setMetaTitle] = useState("");
+  const [metaCompany, setMetaCompany] = useState("");
+
+
+  const [metaError, setMetaError] = useState<string | null>(null);
+
+  const wordCount = useMemo(() => {
+    const t = coverLetter?.trim();
+    if (!t) return 0;
+    return t.split(/\s+/).filter(Boolean).length;
+  }, [coverLetter]);
 
   useEffect(() => {
     if (!isPro) {
@@ -119,7 +132,7 @@ export function CoverLetterPanel() {
                     : "cursor-pointer"
                 } ${
                   coverTone === value
-                    ? "bg-white font-bold text-[#0f172a] shadow-[0_1px_3px_rgba(0,0,0,0.1)]"
+                    ? "bg-[#ede9fe] font-bold text-[#7c3aed] shadow-none"
                     : "bg-transparent text-[#64748b]"
                 }`}
               >
@@ -190,7 +203,7 @@ export function CoverLetterPanel() {
           type="button"
           disabled={loadingCoverLetter}
           onClick={handleRegenerate}
-          className="inline-flex items-center gap-2 rounded-full bg-[#1a56db] px-6 py-2.5 text-sm font-medium text-white transition-all hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
+          className="applyfy-btn-primary inline-flex items-center gap-2 rounded-full bg-[#7c3aed] px-6 py-2.5 text-sm font-medium text-white shadow-[0_2px_10px_rgba(124,58,237,0.35)] transition-all hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <svg
             className={`h-4 w-4 shrink-0 ${regenSpin ? "animate-spin" : ""}`}
@@ -221,7 +234,67 @@ export function CoverLetterPanel() {
         </p>
       ) : null}
 
-      {coverLetterError ? (
+      {coverLetterError === MISSING_META_ERROR ? (
+        <div className="mb-6 mx-auto max-w-sm rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
+          <p className="mb-1 text-sm font-semibold text-[#0f172a]">
+            What job are you applying for?
+          </p>
+          <p className="mb-4 text-xs text-[#64748b]">
+            We couldn&apos;t find the job title in the posting. Fill in the
+            details below and we&apos;ll generate your letter.
+          </p>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-[#64748b]">
+                Job title <span className="text-[#ef4444]">*</span>
+              </label>
+              <input
+                type="text"
+                value={metaTitle}
+                onChange={(e) => {
+                  setMetaTitle(e.target.value);
+                  setMetaError(null);
+                }}
+                placeholder="e.g. Software Engineer"
+                className="mt-1.5 w-full rounded-xl border border-[#e2e8f0] px-3 py-2.5 text-sm text-[#0f172a] outline-none focus:border-[#7c3aed] focus:ring-[3px] focus:ring-[rgba(124,58,237,0.15)]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#64748b]">
+                Company name{" "}
+                <span className="font-normal text-[#94a3b8]">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={metaCompany}
+                onChange={(e) => setMetaCompany(e.target.value)}
+                placeholder="e.g. Google, Stripe"
+                className="mt-1.5 w-full rounded-xl border border-[#e2e8f0] px-3 py-2.5 text-sm text-[#0f172a] outline-none focus:border-[#7c3aed] focus:ring-[3px] focus:ring-[rgba(124,58,237,0.15)]"
+              />
+            </div>
+            {metaError ? (
+              <p className="text-xs text-[#ef4444]">{metaError}</p>
+            ) : null}
+            <button
+              type="button"
+              disabled={loadingCoverLetter}
+              onClick={() => {
+                if (!metaTitle.trim()) {
+                  setMetaError("Job title is required.");
+                  return;
+                }
+                void regenerateCoverLetterWithMeta(
+                  metaTitle.trim(),
+                  metaCompany.trim(),
+                );
+              }}
+              className="applyfy-btn-primary w-full rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:brightness-[1.05] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loadingCoverLetter ? "Generating…" : "Generate cover letter"}
+            </button>
+          </div>
+        </div>
+      ) : coverLetterError ? (
         <p className="mb-4 text-center text-sm text-[#ef4444]">
           {coverLetterError}
         </p>
@@ -229,16 +302,22 @@ export function CoverLetterPanel() {
 
       {coverLetter ? (
         <>
-          <div className="rounded-xl border border-[#e2e8f0] bg-white p-6 transition-shadow focus-within:border-[#1a56db] focus-within:shadow-[0_0_0_3px_rgba(26,86,219,0.1)]">
-            <textarea
-              value={coverLetter}
-              onChange={(e) => setCoverLetterDraft(e.target.value)}
-              className={`cover-letter-editor box-border min-h-[320px] w-full min-w-0 max-w-full resize-y border-0 bg-transparent p-0 text-[15px] leading-[1.8] text-[#0f172a] outline-none whitespace-pre-wrap ${
-                loadingCoverLetter ? "opacity-60" : ""
-              }`}
-              rows={16}
-              aria-label="Cover letter body"
-            />
+          <div className="relative overflow-hidden rounded-xl border border-[#e2e8f0] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.06)] transition-shadow focus-within:border-[#7c3aed] focus-within:shadow-[0_0_0_3px_rgba(124,58,237,0.15)]">
+            <div className="h-2.5 w-full bg-[#ede9fe]" aria-hidden />
+            <div className="relative p-6 pb-12">
+              <textarea
+                value={coverLetter}
+                onChange={(e) => setCoverLetterDraft(e.target.value)}
+                className={`cover-letter-editor box-border min-h-[320px] w-full min-w-0 max-w-full resize-y border-0 bg-transparent p-0 text-[15px] leading-[1.8] text-[#0f172a] outline-none whitespace-pre-wrap ${
+                  loadingCoverLetter ? "opacity-60" : ""
+                }`}
+                rows={16}
+                aria-label="Cover letter body"
+              />
+              <span className="pointer-events-none absolute bottom-3 right-4 rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold tabular-nums text-[#64748b]">
+                {wordCount} words
+              </span>
+            </div>
           </div>
           <p className="mt-2 text-center text-xs text-[#94a3b8]">
             Click to edit
@@ -258,7 +337,7 @@ export function CoverLetterPanel() {
                   type="button"
                   disabled={loadingCoverLetter}
                   onClick={() => void downloadPdf()}
-                  className="rounded-lg bg-[#1a56db] px-5 py-2.5 text-sm font-medium text-white transition-all hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="applyfy-btn-primary rounded-lg bg-[#7c3aed] px-5 py-2.5 text-sm font-medium text-white shadow-[0_2px_10px_rgba(124,58,237,0.35)] transition-all hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Download PDF
                 </button>
@@ -266,17 +345,9 @@ export function CoverLetterPanel() {
                   type="button"
                   disabled={loadingCoverLetter}
                   onClick={() => void downloadDocx()}
-                  className="rounded-lg bg-[#1a56db] px-5 py-2.5 text-sm font-medium text-white transition-all hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="applyfy-btn-primary rounded-lg bg-[#7c3aed] px-5 py-2.5 text-sm font-medium text-white shadow-[0_2px_10px_rgba(124,58,237,0.35)] transition-all hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Download DOCX
-                </button>
-                <button
-                  type="button"
-                  disabled={loadingCoverLetter}
-                  onClick={downloadCoverLetterTxt}
-                  className="rounded-lg border border-[#e2e8f0] bg-white px-5 py-2.5 text-sm font-medium text-[#64748b] transition-all hover:bg-[#f1f5f9] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Download (.txt)
                 </button>
               </>
             ) : (

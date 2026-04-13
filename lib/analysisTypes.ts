@@ -59,6 +59,11 @@ export type ResumeRewriteItem = {
   rewritten: string;
   section: string;
   whyBetter: string;
+  /**
+   * When true, the original bullet already satisfies the target skill semantically;
+   * `rewritten` is a light polish, not a full replacement.
+   */
+  alreadyCoversSkill?: boolean;
 };
 
 /** Result of POST /api/analyze (ATS-focused rewrite + gaps). */

@@ -6,7 +6,7 @@ export function SalaryNegotiationCoachTeaser({ locked }: { locked: boolean }) {
   return (
     <FeatureLock
       locked={locked}
-      tier="pro_plus"
+      tier="premium"
       description="Paste your offer. Get a word-for-word negotiation script."
     >
       <section className="rounded-2xl border border-[#fde68a] bg-gradient-to-br from-[#fffbeb] to-white p-6 shadow-sm">

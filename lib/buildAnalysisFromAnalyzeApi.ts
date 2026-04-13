@@ -7,6 +7,9 @@ import type {
   ResumeRewriteItem,
   StarStory,
 } from "@/lib/analysisTypes";
+import { isKeywordLiterallyPresent } from "@/lib/atsDeterministicKeywords";
+import { keywordAppearsInJobPosting } from "@/lib/jobKeywordInPosting";
+import { isUsableAtsKeywordLabel } from "@/lib/jobKeywordSanitize";
 import { stubInterviewPrepFromAnalysisContext } from "@/lib/stubInterviewPrep";
 
 export type AnalyzeApiResponse = {
@@ -37,6 +40,7 @@ function parseKeywords(raw: unknown): KeywordHit[] {
     const evidence =
       typeof o.evidence === "string" ? o.evidence.replace(/\s+/g, " ").trim() : "";
     if (!skill) continue;
+    if (!isUsableAtsKeywordLabel(skill)) continue;
     out.push({ skill, found: o.found === true, evidence });
   }
   return out;
@@ -67,8 +71,18 @@ function parseRewrites(raw: unknown): ResumeRewriteItem[] {
     const section = typeof o.section === "string" ? o.section.trim() : "";
     const whyBetter =
       typeof o.whyBetter === "string" ? o.whyBetter.trim() : "";
+    const acsRaw = o.alreadyCoversSkill ?? o.already_covers_skill;
+    const alreadyCoversSkill =
+      acsRaw === true ||
+      (typeof acsRaw === "string" && acsRaw.toLowerCase() === "true");
     if (original && rewritten && section && whyBetter) {
-      out.push({ original, rewritten, section, whyBetter });
+      out.push({
+        original,
+        rewritten,
+        section,
+        whyBetter,
+        ...(alreadyCoversSkill ? { alreadyCoversSkill: true } : {}),
+      });
     }
   }
   return out;
@@ -111,27 +125,150 @@ function buildRequirementChecks(keywords: KeywordHit[]): RequirementCheck[] {
   while (rows.length < 8) {
     const n = rows.length + 1;
     rows.push({
-      skill: `Requirement ${n}`,
+      skill: `Open analysis slot ${n}`,
       present: false,
-      evidence: `No keyword slot ${n} was returned for this job — the analysis may be incomplete.`,
+      evidence: `The model returned fewer than eight requirement rows for this job — re-run analyze for a full list.`,
     });
   }
   return rows.slice(0, 12);
 }
+
+function normSkillKey(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Note: the "This exact keyword phrase is not on your resume yet" tail was
+// previously appended to every gap's fix text. It is now shown once as a
+// section-level note in the UI (InterviewPrepPanel risk areas header) so it
+// doesn't repeat on every card. Keep the constant for any remaining usages.
+
+/** Tail when a green keyword line has only two segments (experience + implied match). */
+const FOUND_KW_STRENGTH_TAIL_FALLBACK =
+  "Exact wording from your resume matches this job keyword.";
+
+const STRENGTH_DASH_SPLIT = /\s*[—–]\s*/;
+
+function parseStrengthLineParts(line: string): { skill: string; parts: string[] } | null {
+  const trimmed = line.replace(/\r\n/g, "\n").trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(STRENGTH_DASH_SPLIT).map((p) => p.trim());
+  if (parts.length < 2) return null;
+  const skill = parts[0];
+  if (!skill) return null;
+  return { skill, parts };
+}
+
+/**
+ * First raw strength line per normalized skill label: middle segment + optional tail segments.
+ */
+function strengthSegmentsBySkillLabel(
+  strengthLines: string[],
+): Map<string, { middle: string; tailParts: string[] }> {
+  const map = new Map<string, { middle: string; tailParts: string[] }>();
+  for (const line of strengthLines) {
+    const parsed = parseStrengthLineParts(line);
+    if (!parsed) continue;
+    const key = normSkillKey(parsed.skill);
+    if (map.has(key)) continue;
+    map.set(key, {
+      middle: parsed.parts[1],
+      tailParts: parsed.parts.slice(2),
+    });
+  }
+  return map;
+}
+
+/**
+ * Matched strengths = only ATS-green (literal found) keywords, in keyword list order.
+ * No extra model-only strength lines. Optional reuse of API text when the lead label matches.
+ */
+function buildMatchedStrengthsLiteralGreenOnly(
+  keywords: KeywordHit[],
+  rawMatchedStrengths: string[],
+): string[] {
+  const segments = strengthSegmentsBySkillLabel(rawMatchedStrengths);
+  const out: string[] = [];
+  for (const k of keywords) {
+    if (!k.found) continue;
+    const key = normSkillKey(k.skill);
+    const seg = segments.get(key);
+    if (seg) {
+      const tail =
+        seg.tailParts.length > 0
+          ? seg.tailParts.join(" — ")
+          : FOUND_KW_STRENGTH_TAIL_FALLBACK;
+      out.push(`${k.skill} — ${seg.middle} — ${tail}`);
+    } else {
+      out.push(
+        `${k.skill} — ${k.evidence} — ${FOUND_KW_STRENGTH_TAIL_FALLBACK}`,
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Gaps for the UI: literal-red keywords only, same rules as former “Suggested improvements”.
+ * Reality = strength middle or API gap reality; Fix = API gap fix plus tail (job fit or literal reminder).
+ */
+function buildResumeGapsFromRedKeywords(
+  keywords: KeywordHit[],
+  apiGaps: GapInsight[],
+  rawMatchedStrengths: string[],
+): GapInsight[] {
+  const segments = strengthSegmentsBySkillLabel(rawMatchedStrengths);
+  const out: GapInsight[] = [];
+
+  for (const k of keywords) {
+    if (k.found) continue;
+
+    const key = normSkillKey(k.skill);
+    const gap = apiGaps.find((g) => normSkillKey(g.skill) === key);
+    const seg = segments.get(key);
+    if (!gap && !seg) continue;
+
+    const reality = seg ? seg.middle : gap!.reality;
+
+    // Use only the model-generated fix text (no appended tail — the global
+    // "not on your resume yet" note is shown once in the UI section header).
+    const fix = gap?.fix?.trim()
+      ? gap.fix.trim()
+      : seg?.tailParts.join(" — ") ?? reality;
+
+    out.push({ skill: k.skill, reality, fix });
+  }
+
+  return out;
+}
+
+export type BuildAnalysisOptions = {
+  /** When set, keyword `found` is overridden using literal text match only (no AI semantics). */
+  resumePlainForLiteralKeywords?: string;
+};
 
 /**
  * Validates and maps `/api/analyze` JSON into an `Analysis` object.
  */
 export function buildAnalysisFromAnalyzeApi(
   data: AnalyzeApiResponse,
+  options?: BuildAnalysisOptions,
 ): { analysis: Analysis; resolvedJobPosting?: string } {
   let keywords = parseKeywords(data.keywords ?? []);
+  const jobTextForKeywordGrounding =
+    typeof data.resolvedJobPosting === "string"
+      ? data.resolvedJobPosting.replace(/\r\n/g, "\n").trim()
+      : "";
+  if (jobTextForKeywordGrounding.length >= 40) {
+    keywords = keywords.filter((k) =>
+      keywordAppearsInJobPosting(jobTextForKeywordGrounding, k.skill),
+    );
+  }
   while (keywords.length < 12) {
     const n = keywords.length + 1;
     keywords.push({
-      skill: `Requirement ${n}`,
+      skill: `Open analysis slot ${n}`,
       found: false,
-      evidence: `No keyword slot ${n} was returned for this job — the analysis may be incomplete.`,
+      evidence: `The model returned fewer than twelve keywords — paste a fuller job description or re-run analyze.`,
     });
   }
   keywords = keywords.slice(0, 12);
@@ -143,14 +280,43 @@ export function buildAnalysisFromAnalyzeApi(
     }
   }
 
-  const matchedStrengths = asStringArray(data.matchedStrengths);
-  if (matchedStrengths.length < 4) {
-    throw new Error("Analysis response incomplete: matchedStrengths missing.");
+  let resumeGaps = parseGapInsights(data.gaps);
+  while (resumeGaps.length < 5) {
+    const n = resumeGaps.length + 1;
+    resumeGaps.push({
+      skill: `Follow-up area ${n}`,
+      reality:
+        "The model returned fewer than five gap rows; this slot was not separately scored.",
+      fix: "Re-read the job posting and your resume side by side for any remaining requirements you can honestly support.",
+    });
   }
 
-  const resumeGaps = parseGapInsights(data.gaps);
-  if (resumeGaps.length < 5) {
-    throw new Error("Analysis response incomplete: gaps missing.");
+  const rawStrengthStrings = asStringArray(data.matchedStrengths);
+
+  const plainOpt = options?.resumePlainForLiteralKeywords?.trim();
+  if (plainOpt && plainOpt.length >= 10) {
+    const corpus = plainOpt.replace(/\r\n/g, "\n");
+    keywords = keywords.map((k) => ({
+      ...k,
+      found: isKeywordLiterallyPresent(k.skill, corpus),
+    }));
+  }
+
+  resumeGaps = buildResumeGapsFromRedKeywords(
+    keywords,
+    resumeGaps,
+    rawStrengthStrings,
+  );
+
+  const matchedStrengths = buildMatchedStrengthsLiteralGreenOnly(
+    keywords,
+    rawStrengthStrings,
+  );
+  const nFoundKw = keywords.filter((k) => k.found).length;
+  if (nFoundKw > 0 && matchedStrengths.length === 0) {
+    throw new Error(
+      "Analysis response incomplete: matchedStrengths missing for matched keywords.",
+    );
   }
 
   const rewrites = parseRewrites(data.rewrites);
@@ -217,7 +383,7 @@ export function buildAnalysisFromAnalyzeApi(
     atsScore,
     quickWins: quickWins.slice(0, 3),
     keywords,
-    matchedStrengths: matchedStrengths.slice(0, 4),
+    matchedStrengths,
     resumeGaps: resumeGaps.slice(0, 8),
     rewrites: rewrites.slice(0, 6),
     matchScore,

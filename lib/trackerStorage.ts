@@ -13,7 +13,8 @@ export type TrackerApplication = {
   id: string;
   company: string;
   jobTitle: string;
-  date: string;
+  date: string;           // dateSaved — ISO yyyy-mm-dd
+  dateApplied: string | null;
   matchScore: number;
   status: TrackerStatus;
   resumeSnapshot: string;
@@ -24,6 +25,7 @@ export type TrackerApplication = {
     "matchExplanation" | "matchedSkills" | "missingSkills" | "atsMatched" | "atsKeywords"
   >;
   interviewDate: string | null;
+  notes: string;
 };
 
 function read(): TrackerApplication[] {
@@ -47,6 +49,11 @@ function read(): TrackerApplication[] {
           v.interviewDate === undefined || v.interviewDate === ""
             ? null
             : v.interviewDate,
+        dateApplied:
+          v.dateApplied === undefined || v.dateApplied === ""
+            ? null
+            : v.dateApplied,
+        notes: typeof v.notes === "string" ? v.notes : "",
       }));
   } catch {
     return [];

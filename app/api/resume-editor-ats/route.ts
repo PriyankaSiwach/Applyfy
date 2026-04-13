@@ -2,26 +2,29 @@ import type {
   ResumeEditorAtsResult,
   ResumeEditorQuickFix,
 } from "@/lib/resumeEditorAtsTypes";
+import { filterKeywordLabelsToJobPosting } from "@/lib/jobKeywordInPosting";
+import { filterAtsKeywordLabels } from "@/lib/jobKeywordSanitize";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-4o";
 
-const ATS_SYSTEM = `You are an ATS (Applicant Tracking System) scoring engine.
-Score the resume strictly based on keyword presence, relevant experience match, and skill alignment with the job posting.
+const ATS_SYSTEM = `You are an expert ATS resume analyzer. Score and label keywords using SEMANTIC matching, not literal substring matching.
 
 IMPORTANT RULES:
-- If a keyword from the job posting appears anywhere in the resume, count it as present
-- Score should INCREASE when relevant keywords are added
-- Score should NEVER decrease just because of formatting
-- Score range: 0-100
-- Be consistent: same resume + same job = same score
-- Only penalize for genuinely missing required skills`;
+- A job requirement counts as PRESENT if the resume shows it through direct terms, related tools, equivalent phrasing, or clear behavioral proof anywhere in the text.
+- Count as MISSING only when there is no reasonable indirect or equivalent evidence.
+- Soft skills: mentoring, collaboration, leadership verbs, timelines/deliverables/sprints count as evidence — not only the exact soft-skill phrase.
+- Score should INCREASE when relevant capabilities are added or clarified
+- Score should NEVER decrease only because of formatting
+- Score range: 0-100; same resume + same job should yield a consistent score
+- Only penalize for genuinely missing required capabilities after semantic review
+- In keyword arrays: extract only real skills and tools from posting content — never return labels like "Job competency N", "Requirement N", or other numbered form fields`;
 
 function extractJsonObject(content: string): Record<string, unknown> {
   const trimmed = content.trim();
@@ -84,15 +87,32 @@ function asQuickFixes(v: unknown): ResumeEditorQuickFix[] {
   return out.slice(0, 12);
 }
 
-function parseResult(raw: Record<string, unknown>): ResumeEditorAtsResult | null {
+function parseResult(
+  raw: Record<string, unknown>,
+  jobPosting: string,
+): ResumeEditorAtsResult | null {
   const atsRaw = raw.ats_score;
   const ats_score =
     typeof atsRaw === "number" && Number.isFinite(atsRaw)
       ? Math.min(100, Math.max(0, Math.round(atsRaw)))
       : null;
   if (ats_score === null) return null;
-  const missing_keywords = asStringArray(raw.missing_keywords);
-  const present_keywords = asStringArray(raw.present_keywords);
+  let missing_keywords = filterAtsKeywordLabels(
+    asStringArray(raw.missing_keywords),
+  );
+  let present_keywords = filterAtsKeywordLabels(
+    asStringArray(raw.present_keywords),
+  );
+  if (jobPosting.length >= 40) {
+    missing_keywords = filterKeywordLabelsToJobPosting(
+      jobPosting,
+      missing_keywords,
+    );
+    present_keywords = filterKeywordLabelsToJobPosting(
+      jobPosting,
+      present_keywords,
+    );
+  }
   let quick_fixes = asQuickFixes(raw.quick_fixes);
   if (quick_fixes.length === 0 && Array.isArray(raw.quick_wins)) {
     quick_fixes = asStringArray(raw.quick_wins).map((s) => ({
@@ -114,12 +134,11 @@ function parseResult(raw: Record<string, unknown>): ResumeEditorAtsResult | null
 }
 
 export async function POST(request: Request) {
-  if (!OPENAI_API_KEY) {
-    return jsonNoStore(
-      { error: "Missing OPENAI_API_KEY on the server" },
-      { status: 503 },
-    );
+  const keyCheck = requireOpenAiApiKey();
+  if (!keyCheck.ok) {
+    return jsonNoStore({ error: keyCheck.error }, { status: 503 });
   }
+  const openaiKey = keyCheck.key;
 
   let body: unknown;
   try {
@@ -179,12 +198,12 @@ ${prevLine}${changeBlock}
 
 Return a JSON object with exactly these keys (no markdown, no text outside JSON):
 - ats_score: integer 0-100
-- missing_keywords: array of short strings (job terms still absent or only weakly present)
-- present_keywords: array of short strings (clearly present in the resume text, including substring matches)
+- missing_keywords: array of short strings (job terms still absent after semantic check — no equivalent evidence)
+- present_keywords: array of short strings (present directly or through clear semantic equivalent in the resume)
 - quick_fixes: array of 2-8 objects, each with:
-  - "summary": one-line actionable instruction shown in the UI
+  - "summary": one-line actionable instruction shown in the UI (never suggest new skill inventory lists, "Tools:", "ERP/NetSuite/SAP" lines, or comma-separated fake competencies — only tighten existing bullets the user already has)
   - "target_phrase": exact substring from the CURRENT resume text to replace (must match verbatim if possible; empty string only if no specific phrase)
-  - "replacement": full replacement text for that substring (can be empty if not applicable)
+  - "replacement": full replacement text for that substring — same structure as the original phrase (no new labeled lists; can be empty if not applicable)
 - score_reasoning: one concise sentence explaining the score (and mention keyword adds if relevant)`;
 
   try {
@@ -192,7 +211,7 @@ Return a JSON object with exactly these keys (no markdown, no text outside JSON)
       method: "POST",
       cache: "no-store",
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${openaiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -246,7 +265,7 @@ Return a JSON object with exactly these keys (no markdown, no text outside JSON)
       );
     }
 
-    const result = parseResult(parsed);
+    const result = parseResult(parsed, jobPosting);
     if (!result) {
       return jsonNoStore(
         { error: "Could not update score — try again." },

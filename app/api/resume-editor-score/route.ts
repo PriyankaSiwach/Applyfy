@@ -1,145 +1,73 @@
-import { appendFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+
+import { verifyKeywordsAgainstResume } from "@/lib/atsDeterministicKeywords";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { filterKeywordLabelsToJobPosting } from "@/lib/jobKeywordInPosting";
+import { filterAtsKeywordLabels } from "@/lib/jobKeywordSanitize";
+import { parseResumeIntoBlocks } from "@/lib/resumeEditorBlocks";
+import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL =
-  process.env.ANTHROPIC_RESUME_SCORE_MODEL ?? "claude-sonnet-4-20250514";
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_MODEL = "gpt-4o";
 
-const DEBUG_LOG = "/Users/priyankasiwach/Desktop/applyfy/.cursor/debug-67af35.log";
-
-function dbgApi(payload: Record<string, unknown>) {
-  try {
-    appendFileSync(
-      DEBUG_LOG,
-      `${JSON.stringify({
-        sessionId: "67af35",
-        timestamp: Date.now(),
-        ...payload,
-      })}\n`,
-    );
-  } catch {
-    /* ignore */
+function extractBulletLines(resumePlain: string): string {
+  const blocks = parseResumeIntoBlocks(resumePlain.replace(/\r\n/g, "\n"));
+  const lines: string[] = [];
+  for (const b of blocks) {
+    if (b.kind !== "bullet") continue;
+    lines.push(...b.lines);
   }
+  const joined = lines.join("\n").trim();
+  return joined.length > 0 ? joined : resumePlain.slice(0, 12_000);
 }
 
-function extractAnthropicText(data: unknown): string {
-  if (typeof data !== "object" || data === null) return "";
-  const d = data as { content?: { type?: string; text?: string }[] };
-  const blocks = d.content;
-  if (!Array.isArray(blocks)) return "";
-  const textBlock = blocks.find((b) => b.type === "text" && b.text);
-  return (textBlock?.text ?? "").trim();
-}
-
-function stripBackticksAndParseJson(text: string): Record<string, unknown> {
+function stripJsonObject(text: string): Record<string, unknown> {
   let s = text.trim();
   s = s.replace(/^`+json\s*/i, "").replace(/^`+/, "").replace(/`+$/, "");
   s = s.trim();
-  try {
-    const parsed = JSON.parse(s) as unknown;
-    if (typeof parsed === "object" && parsed !== null) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    /* fall through */
+  const parsed = JSON.parse(s) as unknown;
+  if (typeof parsed === "object" && parsed !== null) {
+    return parsed as Record<string, unknown>;
   }
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    const parsed = JSON.parse(s.slice(start, end + 1)) as unknown;
-    if (typeof parsed === "object" && parsed !== null) {
-      return parsed as Record<string, unknown>;
-    }
-  }
-  throw new Error("Invalid JSON in model response");
+  throw new Error("Invalid JSON");
 }
 
-function asStringArray(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  return v
-    .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-    .map((x) => x.trim());
-}
+async function fetchBulletQualityScore25(
+  resumeBullets: string,
+  openaiKey: string,
+): Promise<number> {
+  if (!openaiKey) return 0;
+  const user = `Rate the overall strength of these resume bullets on a scale of 0-25 only.
+Consider: strong action verbs, specificity, and measurable outcomes where present.
+Return ONE JSON object only, no markdown: {"quality_score": <integer 0-25>}
 
-type ScorePayload = {
-  ats_score: number;
-  present_keywords: string[];
-  missing_keywords: string[];
-  reasoning: string;
-};
+BULLETS:
+${resumeBullets.slice(0, 24_000)}`;
 
-function toScoreResult(parsed: Record<string, unknown>): ScorePayload | null {
-  const scoreRaw = parsed.ats_score;
-  const ats_score =
-    typeof scoreRaw === "number" && Number.isFinite(scoreRaw)
-      ? Math.min(100, Math.max(0, Math.round(scoreRaw)))
-      : null;
-  if (ats_score === null) return null;
-  return {
-    ats_score,
-    present_keywords: asStringArray(parsed.present_keywords),
-    missing_keywords: asStringArray(parsed.missing_keywords),
-    reasoning:
-      typeof parsed.reasoning === "string" ? parsed.reasoning.trim() : "",
-  };
-}
-
-async function scoreWithAnthropic(userContent: string): Promise<string | null> {
-  if (!ANTHROPIC_API_KEY) return null;
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 400,
-      messages: [{ role: "user", content: userContent }],
-    }),
-  });
-  const rawText = await res.text();
-  let data: unknown;
-  try {
-    data = JSON.parse(rawText) as unknown;
-  } catch {
-    console.error("[resume-editor-score] Anthropic non-JSON", rawText.slice(0, 400));
-    return null;
-  }
-  if (!res.ok) {
-    console.error("[resume-editor-score] Anthropic error", res.status, rawText.slice(0, 400));
-    return null;
-  }
-  const text = extractAnthropicText(data);
-  return text || null;
-}
-
-async function scoreWithOpenAI(userContent: string): Promise<string | null> {
-  if (!OPENAI_API_KEY) return null;
   const res = await fetch(OPENAI_API_URL, {
     method: "POST",
     cache: "no-store",
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${openaiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      max_tokens: 400,
-      temperature: 0.2,
+      max_tokens: 80,
+      temperature: 0,
       response_format: { type: "json_object" },
-      messages: [{ role: "user", content: userContent }],
+      messages: [
+        {
+          role: "system",
+          content:
+            "You output only valid JSON with a single integer quality_score 0-25.",
+        },
+        { role: "user", content: user },
+      ],
     }),
   });
   const rawText = await res.text();
@@ -147,30 +75,37 @@ async function scoreWithOpenAI(userContent: string): Promise<string | null> {
   try {
     data = JSON.parse(rawText) as unknown;
   } catch {
-    console.error("[resume-editor-score] OpenAI non-JSON", rawText.slice(0, 400));
-    return null;
+    console.error("[resume-editor-score] quality OpenAI non-JSON", rawText.slice(0, 400));
+    return 0;
   }
   if (!res.ok) {
-    console.error("[resume-editor-score] OpenAI error", res.status, rawText.slice(0, 400));
-    return null;
+    console.error("[resume-editor-score] quality OpenAI error", res.status, rawText.slice(0, 400));
+    return 0;
   }
   const choices = (data as { choices?: Array<{ message?: { content?: string } }> })
     ?.choices;
   const text = choices?.[0]?.message?.content?.trim() ?? "";
-  return text || null;
+  if (!text) return 0;
+  try {
+    const obj = stripJsonObject(text);
+    const q = obj.quality_score;
+    if (typeof q !== "number" || !Number.isFinite(q)) return 0;
+    return Math.min(25, Math.max(0, Math.round(q)));
+  } catch {
+    return 0;
+  }
 }
 
-export async function POST(request: Request) {
-  dbgApi({
-    hypothesisId: "H4",
-    location: "resume-editor-score/route.ts:POST",
-    message: "resume-editor-score entry",
-    data: {
-      hasAnthropicKey: Boolean(ANTHROPIC_API_KEY),
-      hasOpenaiKey: Boolean(OPENAI_API_KEY),
-    },
-  });
+export type HybridScoreResult = {
+  ats_score: number;
+  present_keywords: string[];
+  missing_keywords: string[];
+  reasoning: string;
+  keyword_score_75: number;
+  quality_score_25: number;
+};
 
+export async function POST(request: Request) {
   let body: unknown;
   try {
     body = await request.json();
@@ -182,20 +117,21 @@ export async function POST(request: Request) {
   const jobPosting =
     typeof o.jobPosting === "string" ? o.jobPosting.trim() : "";
   const resumeTextFixed =
-    typeof o.resumeText === "string" ? o.resumeText.trim() : "";
+    typeof o.resumeText === "string" ? o.resumeText.replace(/\r\n/g, "\n").trim() : "";
 
-  const prevRaw = o.previousScore;
-  const previousScore =
-    typeof prevRaw === "number" && Number.isFinite(prevRaw)
-      ? Math.min(100, Math.max(0, Math.round(prevRaw)))
-      : 0;
-
-  if (!jobPosting || jobPosting.length < 40) {
-    return jsonNoStore(
-      { error: "Job posting is required." },
-      { status: 400 },
-    );
+  const kwRaw = o.atsKeywords;
+  let atsKeywords = filterAtsKeywordLabels(
+    Array.isArray(kwRaw)
+      ? kwRaw
+          .filter((x): x is string => typeof x === "string")
+          .map((x) => x.trim())
+          .filter((x) => x.length > 0)
+      : [],
+  );
+  if (jobPosting.length >= 40) {
+    atsKeywords = filterKeywordLabelsToJobPosting(jobPosting, atsKeywords);
   }
+
   if (!resumeTextFixed || resumeTextFixed.length < 10) {
     return jsonNoStore({ error: "Resume text is required." }, { status: 400 });
   }
@@ -203,79 +139,44 @@ export async function POST(request: Request) {
     return jsonNoStore({ error: "Resume text is too long." }, { status: 400 });
   }
 
-  if (!ANTHROPIC_API_KEY && !OPENAI_API_KEY) {
-    return jsonNoStore(
-      {
-        error:
-          "No AI key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY on the server.",
-      },
-      { status: 503 },
-    );
+  const keyCheck = requireOpenAiApiKey();
+  if (!keyCheck.ok) {
+    return jsonNoStore({ error: keyCheck.error }, { status: 503 });
   }
+  const openaiKey = keyCheck.key;
 
-  const userContent = `Score this resume against the job posting for ATS keyword match. Be consistent and accurate. If a keyword from the job appears anywhere in the resume text count it as present. Previous score was ${previousScore} — only change significantly if content changed significantly.
+  const resumeFp = createHash("sha256")
+    .update(resumeTextFixed, "utf8")
+    .digest("hex")
+    .slice(0, 16);
+  console.log("[resume-editor-score] hybrid fingerprint", {
+    sha256_16: resumeFp,
+    charLength: resumeTextFixed.length,
+    nKeywords: atsKeywords.length,
+  });
 
-Job posting:
-${jobPosting.slice(0, 60_000)}
+  const verified = verifyKeywordsAgainstResume(
+    resumeTextFixed,
+    atsKeywords,
+    null,
+  );
+  const bullets = extractBulletLines(resumeTextFixed);
+  const quality25 = await fetchBulletQualityScore25(bullets, openaiKey);
+  const rawTotal = verified.score75 + quality25;
+  const ats_score = Math.min(100, Math.max(0, Math.round(rawTotal)));
 
-Resume:
-${resumeTextFixed.slice(0, 40_000)}
+  const reasoning =
+    `Keyword match (literal text only, case-insensitive): ${verified.matchedCount}/${verified.totalCount} → ${verified.score75}/75. ` +
+    `Bullet quality (model): ${quality25}/25.`;
 
-Return ONLY this JSON with no markdown:
-{"ats_score": 72, "present_keywords": ["AWS", "Python"], "missing_keywords": ["SQL", "Machine Learning"], "reasoning": "one sentence"}`;
+  const result: HybridScoreResult = {
+    ats_score,
+    present_keywords: verified.present,
+    missing_keywords: verified.missing,
+    reasoning,
+    keyword_score_75: verified.score75,
+    quality_score_25: quality25,
+  };
 
-  try {
-    let rawModelText: string | null = null;
-    let provider: "anthropic" | "openai" | null = null;
-
-    if (ANTHROPIC_API_KEY) {
-      rawModelText = await scoreWithAnthropic(userContent);
-      if (rawModelText) provider = "anthropic";
-    }
-    if (!rawModelText && OPENAI_API_KEY) {
-      rawModelText = await scoreWithOpenAI(userContent);
-      if (rawModelText) provider = "openai";
-    }
-
-    dbgApi({
-      hypothesisId: "H4-fix",
-      location: "resume-editor-score/route.ts:POST",
-      message: "model text received",
-      data: { provider, textLen: rawModelText?.length ?? 0 },
-    });
-
-    if (!rawModelText) {
-      return jsonNoStore(
-        { error: "Score update failed." },
-        { status: 502 },
-      );
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = stripBackticksAndParseJson(rawModelText);
-    } catch (e) {
-      console.error("[resume-editor-score] JSON parse", e, rawModelText.slice(0, 500));
-      return jsonNoStore(
-        { error: "Could not parse score response." },
-        { status: 502 },
-      );
-    }
-
-    const result = toScoreResult(parsed);
-    if (!result) {
-      return jsonNoStore(
-        { error: "Invalid score in response." },
-        { status: 502 },
-      );
-    }
-
-    return jsonNoStore({ result });
-  } catch (e) {
-    console.error("[resume-editor-score]", e);
-    return jsonNoStore(
-      { error: "Score update failed." },
-      { status: 502 },
-    );
-  }
+  return jsonNoStore({ result });
 }

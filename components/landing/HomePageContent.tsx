@@ -65,7 +65,7 @@ const featureCards = [
   {
     title: "Job Matching Score",
     body: "See your % match against every requirement. Know your odds before you apply.",
-    accent: "#10b981",
+    accent: "#8b5cf6",
     Icon: IconTarget,
   },
   {
@@ -109,7 +109,7 @@ const howSteps = [
     n: "03",
     title: "Apply with Confidence",
     body: "Generate a custom cover letter, tailored to this specific role, in one click.",
-    accent: "#10b981",
+    accent: "#7c3aed",
     Icon: IconSend,
     side: "left" as const,
   },
@@ -121,6 +121,27 @@ const howSteps = [
     Icon: IconTrending,
     side: "right" as const,
   },
+] as const;
+
+const trustedCompanyMarks = [
+  { name: "Google", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[19px] font-medium tracking-tight" },
+  { name: "Microsoft", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[17px] font-semibold tracking-[-0.02em]" },
+  { name: "Apple", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[20px] font-semibold tracking-wide" },
+  { name: "Amazon", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[16px] font-bold uppercase tracking-[0.12em]" },
+  { name: "Meta", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[22px] font-extrabold tracking-tight" },
+  { name: "JPMorgan", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[15px] font-semibold tracking-tight" },
+  { name: "Deloitte", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[16px] font-bold tracking-[0.08em]" },
+  { name: "Adobe", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[18px] font-semibold italic" },
+  { name: "Salesforce", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[14px] font-bold uppercase tracking-wider" },
+  { name: "Netflix", fontClass: "font-[family-name:var(--font-plus-jakarta)] text-[19px] font-extrabold tracking-tight" },
+] as const;
+
+const footerLanguages = [
+  { flag: "🇺🇸", label: "English" },
+  { flag: "🇩🇪", label: "German" },
+  { flag: "🇫🇷", label: "French" },
+  { flag: "🇪🇸", label: "Spanish" },
+  { flag: "🇵🇱", label: "Polish" },
 ] as const;
 
 const testimonials = [
@@ -142,7 +163,7 @@ const testimonials = [
   },
   {
     initials: "AR",
-    gradient: "linear-gradient(135deg, #10b981, #34d399)",
+    gradient: "linear-gradient(135deg, #7c3aed, #a78bfa)",
     name: "Alex R.",
     role: "UX Designer",
     quote:
@@ -255,9 +276,9 @@ export function HomePageContent() {
     function frame(now: number) {
       const t = Math.min(1, (now - start) / dur);
       const e = easeOutCubic(t);
-      setS1(Math.round(50000 * e));
-      setS2(Math.round(95 * e));
-      setS3(Math.round(10000 * e));
+      setS1(Math.round(500 * e));
+      setS2(Math.round(2 * e));
+      setS3(Math.round(6 * e));
       setS4(4.9 * e);
       if (t < 1) raf = requestAnimationFrame(frame);
     }
@@ -297,25 +318,12 @@ export function HomePageContent() {
         />
         <div className="relative z-[1] mx-auto w-full max-w-[1200px] px-6">
           <HeroStagger index={0}>
-            <p className="mx-auto inline-flex items-center gap-2 rounded-full border border-[rgba(107,140,255,0.25)] bg-[rgba(107,140,255,0.1)] px-4 py-[5px] text-[13px] font-medium text-[var(--brand)]">
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--green)]"
-                style={{
-                  animation: "home-badge-pulse 1.5s ease-in-out infinite",
-                }}
-                aria-hidden
-              />
-              ✦ Now with AI Interview Prep — try it free
-            </p>
-          </HeroStagger>
-
-          <HeroStagger index={1}>
             <h1 className="mt-8 font-[family-name:var(--font-plus-jakarta)] text-[clamp(44px,7vw,80px)] font-extrabold leading-[1.1] tracking-[-0.03em] text-[var(--text-primary)]">
               Land Your Dream Job
             </h1>
           </HeroStagger>
 
-          <HeroStagger index={2}>
+          <HeroStagger index={1}>
             <h1
               className="mt-1 font-[family-name:var(--font-plus-jakarta)] text-[clamp(44px,7vw,80px)] font-extrabold leading-[1.1] tracking-[-0.03em]"
               style={{
@@ -330,13 +338,13 @@ export function HomePageContent() {
             </h1>
           </HeroStagger>
 
-          <HeroStagger index={3}>
+          <HeroStagger index={2}>
             <p className="mt-2 font-[family-name:var(--font-plus-jakarta)] text-xl font-semibold text-[var(--brand-2)]">
               Stop guessing, start getting hired.
             </p>
           </HeroStagger>
 
-          <HeroStagger index={4}>
+          <HeroStagger index={3}>
             <p className="mx-auto mt-4 max-w-[560px] text-[17px] leading-[1.75] text-[var(--text-secondary)]">
               Upload your resume, paste a job link — get your match score, gap
               analysis, a tailored cover letter, and interview prep cards in
@@ -344,7 +352,7 @@ export function HomePageContent() {
             </p>
           </HeroStagger>
 
-          <HeroStagger index={5}>
+          <HeroStagger index={4}>
             <div className="mt-10 flex flex-col items-center justify-center gap-[14px] sm:flex-row">
               <Link
                 href="/my-application"
@@ -365,10 +373,10 @@ export function HomePageContent() {
             </div>
           </HeroStagger>
 
-          <HeroStagger index={6}>
+          <HeroStagger index={5}>
             <p className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[13px] text-[var(--text-muted)]">
               <span className="inline-flex items-center gap-1">
-                <span className="text-[var(--green)]">●</span> No credit card
+                <span className="text-[var(--brand)]">●</span> No credit card
                 required, start free
               </span>
               <span aria-hidden className="text-[var(--text-muted)]">
@@ -378,7 +386,7 @@ export function HomePageContent() {
             </p>
           </HeroStagger>
 
-          <HeroStagger index={7}>
+          <HeroStagger index={6}>
             <div
               className="relative mx-auto mt-12 h-[36px] w-6 rounded-xl border-2 border-[var(--text-muted)]"
               aria-hidden
@@ -391,6 +399,49 @@ export function HomePageContent() {
               />
             </div>
           </HeroStagger>
+        </div>
+      </section>
+
+      {/* Trusted companies — social proof */}
+      <section
+        className="relative overflow-hidden border-y border-[rgba(255,255,255,0.12)] py-14 transition-colors duration-300"
+        style={{
+          background:
+            "linear-gradient(135deg, #5b21b6 0%, var(--brand) 42%, var(--brand-2) 100%)",
+        }}
+        aria-labelledby="trusted-companies-heading"
+      >
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.14]"
+          style={{
+            backgroundImage: "radial-gradient(circle, #fff 1px, transparent 1px)",
+            backgroundSize: "22px 22px",
+          }}
+          aria-hidden
+        />
+        <div className="relative z-[1] mx-auto max-w-[1200px] px-6 text-center">
+          <p className="text-[12px] font-bold uppercase tracking-[0.14em] text-white/70">
+            Social proof
+          </p>
+          <h2
+            id="trusted-companies-heading"
+            className="mt-2 font-[family-name:var(--font-plus-jakarta)] text-[clamp(26px,4vw,36px)] font-extrabold leading-tight text-white"
+          >
+            Trusted by thousands of job seekers
+          </h2>
+          <p className="mx-auto mt-2 max-w-xl text-[15px] leading-relaxed text-white/80">
+            Candidates use Applyfy to prepare stronger applications for roles at leading companies worldwide.
+          </p>
+          <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:gap-4">
+            {trustedCompanyMarks.map((c) => (
+              <div
+                key={c.name}
+                className="flex min-h-[52px] items-center justify-center rounded-xl border border-white/15 bg-white/[0.08] px-3 py-3 text-white shadow-sm backdrop-blur-sm transition-colors duration-200 hover:border-white/25 hover:bg-white/[0.12]"
+              >
+                <span className={`select-none text-white ${c.fontClass}`}>{c.name}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -409,14 +460,14 @@ export function HomePageContent() {
                 value: `${s1.toLocaleString("en-US")}+`,
                 label: "Resumes Optimized",
               },
-              { value: `${Math.round(s2)}%`, label: "Interview Success Rate" },
+              { value: `${Math.round(s2)} min`, label: "Average Setup" },
               {
-                value: `${s3.toLocaleString("en-US")}+`,
-                label: "Jobs Matched",
+                value: `${s3}`,
+                label: "AI-Powered Tools",
               },
               {
                 value: `${s4.toFixed(1)}/5`,
-                label: "User Rating ★★★★★",
+                label: "Early Rating ★★★★★",
               },
             ].map((row) => (
               <div
@@ -434,6 +485,41 @@ export function HomePageContent() {
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Trust badges — SSL & payments */}
+      <section
+        className="border-b border-[var(--border)] bg-[var(--bg-card)] py-8 transition-colors duration-300"
+        aria-label="Security and payments"
+      >
+        <div className="mx-auto flex max-w-[1200px] flex-col items-center justify-center gap-6 px-6 sm:flex-row sm:gap-12 md:gap-16">
+          <div className="inline-flex items-center gap-3 text-[var(--text-primary)]">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-600 ring-1 ring-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-400/30">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            </span>
+            <div className="text-left">
+              <p className="text-[13px] font-bold text-emerald-700 dark:text-emerald-300">SSL Secure</p>
+              <p className="text-[12px] text-[var(--text-muted)]">Encryption in transit</p>
+            </div>
+          </div>
+          <div className="hidden h-8 w-px bg-[var(--border)] sm:block" aria-hidden />
+          <div className="inline-flex items-center gap-3 text-[var(--text-primary)]">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--brand-tint)] text-[var(--brand)] ring-1 ring-[var(--border-hover)]">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </span>
+            <div className="text-left">
+              <p className="text-[13px] font-bold text-[var(--text-primary)]">
+                Secure Payments{" "}
+                <span className="text-[var(--brand)]">· Powered by Stripe</span>
+              </p>
+              <p className="text-[12px] text-[var(--text-muted)]">Industry-standard checkout</p>
+            </div>
           </div>
         </div>
       </section>
@@ -631,7 +717,7 @@ export function HomePageContent() {
               <div className="flex h-11 items-center gap-2 rounded-t-2xl border-b border-[var(--border)] bg-[var(--bg-surface)] px-4">
                 <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
                 <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-                <span className="h-3 w-3 rounded-full bg-[#28c840]" />
+                <span className="h-3 w-3 rounded-full bg-[#a78bfa]" />
                 <div className="mx-auto rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-4 py-1 text-[13px] text-[var(--text-muted)]">
                   applyfy.app/analyze
                 </div>
@@ -654,15 +740,16 @@ export function HomePageContent() {
                       className="h-full rounded-full transition-[width] duration-[1.2s] ease-out"
                       style={{
                         width: `${atsWidth}%`,
-                        background: "linear-gradient(90deg, var(--brand), var(--green))",
+                        background:
+                          "linear-gradient(90deg, var(--brand), #a78bfa)",
                       }}
                     />
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <span className="inline-flex items-center gap-1 rounded-full border border-[#bbf7d0] bg-[rgba(16,185,129,0.1)] px-2 py-0.5 text-[11px] font-medium text-[var(--green)]">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-[#ddd6fe] bg-[rgba(124,58,237,0.1)] px-2 py-0.5 text-[11px] font-medium text-[#6d28d9]">
                       Algorithms ✓
                     </span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-[#bbf7d0] bg-[rgba(16,185,129,0.1)] px-2 py-0.5 text-[11px] font-medium text-[var(--green)]">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-[#ddd6fe] bg-[rgba(124,58,237,0.1)] px-2 py-0.5 text-[11px] font-medium text-[#6d28d9]">
                       Cloud Computing ✓
                     </span>
                     <span className="inline-flex items-center gap-1 rounded-full border border-[#fecaca] bg-[rgba(239,68,68,0.08)] px-2 py-0.5 text-[11px] font-medium text-[var(--red)]">
@@ -846,41 +933,39 @@ export function HomePageContent() {
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a
-                  href="#"
+                  href="https://x.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:border-[var(--border-hover)] hover:text-[var(--text-primary)]"
-                  aria-label="Facebook"
-                >
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-                    <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
-                  </svg>
-                </a>
-                <a
-                  href="#"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:border-[var(--border-hover)] hover:text-[var(--text-primary)]"
-                  aria-label="Twitter"
+                  aria-label="X / Twitter"
                 >
                   <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
                     <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
                   </svg>
                 </a>
-                <a
-                  href="#"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:border-[var(--border-hover)] hover:text-[var(--text-primary)]"
-                  aria-label="LinkedIn"
-                >
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
-                  </svg>
-                </a>
-                <a
-                  href="#"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:border-[var(--border-hover)] hover:text-[var(--text-primary)]"
-                  aria-label="Instagram"
-                >
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-                    <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" />
-                  </svg>
-                </a>
+              </div>
+              <div className="mt-8 border-t border-[var(--border)] pt-6">
+                <p className="text-[13px] font-semibold uppercase tracking-widest text-[var(--text-primary)]">
+                  Language
+                </p>
+                <p className="mt-1 text-[12px] text-[var(--text-muted)]">
+                  More locales coming soon.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {footerLanguages.map(({ flag, label }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-2.5 py-1.5 text-[13px] text-[var(--text-secondary)] transition-colors hover:border-[var(--border-hover)] hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)]"
+                      aria-label={label}
+                    >
+                      <span className="text-base leading-none" aria-hidden>
+                        {flag}
+                      </span>
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <div>
@@ -888,14 +973,19 @@ export function HomePageContent() {
                 Product
               </p>
               <ul className="mt-4 space-y-2">
-                {["Features", "Pricing", "FAQ", "Roadmap"].map((l) => (
+                {[
+                  ["Features", "/features"],
+                  ["Pricing", "/pricing"],
+                  ["FAQ", "/faq"],
+                  ["Roadmap", "/roadmap"],
+                ].map(([l, h]) => (
                   <li key={l}>
-                    <a
-                      href={l === "Pricing" ? "/pricing" : "#"}
+                    <Link
+                      href={h}
                       className="text-[14px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
                     >
                       {l}
-                    </a>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -907,9 +997,7 @@ export function HomePageContent() {
               <ul className="mt-4 space-y-2">
                 {[
                   ["About Us", "/about"],
-                  ["Careers", "#"],
-                  ["Blog", "#"],
-                  ["Contact", "/about"],
+                  ["Contact", "/contact"],
                 ].map(([l, h]) => (
                   <li key={l}>
                     <Link
@@ -928,18 +1016,16 @@ export function HomePageContent() {
               </p>
               <ul className="mt-4 space-y-2">
                 {[
-                  "Privacy Policy",
-                  "Terms of Service",
-                  "Cookie Policy",
-                  "GDPR",
-                ].map((l) => (
+                  ["Privacy Policy", "/privacy"],
+                  ["Terms of Service", "/terms"],
+                ].map(([l, h]) => (
                   <li key={l}>
-                    <a
-                      href="#"
+                    <Link
+                      href={h}
                       className="text-[14px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
                     >
                       {l}
-                    </a>
+                    </Link>
                   </li>
                 ))}
               </ul>

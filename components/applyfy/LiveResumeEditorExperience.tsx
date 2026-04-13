@@ -1,42 +1,142 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { useApplyfy } from "@/components/applyfy/ApplyfyProvider";
+  useApplyfy,
+  type HybridAtsPayload,
+} from "@/components/applyfy/ApplyfyProvider";
 import {
-  findAndReplaceInResumeEditor,
-  highlightRewriteInEditor,
-  scheduleRemoveJustAppliedClass,
-} from "@/lib/resumeEditorRewriteMatch";
-import { appendSentenceToResume } from "@/lib/resumeEditorTextOps";
+  blocksToPlain,
+  bulletJoined,
+  bulletTextChanged,
+  type BulletBlock,
+  type ResumeBlock,
+  isSectionHeader,
+  pairBulletRewritesAligned,
+  parseResumeIntoBlocks,
+  shouldSendBulletToAi,
+} from "@/lib/resumeEditorBlocks";
+import { verifyKeywordsAgainstResume } from "@/lib/atsDeterministicKeywords";
+import { extractJobTitleFromPosting } from "@/lib/jobMetaFromPosting";
+import { filterKeywordLabelsToJobPosting } from "@/lib/jobKeywordInPosting";
+import { filterAtsKeywordLabels } from "@/lib/jobKeywordSanitize";
+import {
+  purgeFabricatedResumeLines,
+  purgeResumeEditorBrowserStorage,
+} from "@/lib/resumeFabricationPurge";
+import { downloadResumePdf } from "@/lib/resumePdfExport";
 
-const LS_RESUME = "resumeText";
 const LS_JOB = "jobPosting";
 const LS_ATS_SCORE = "atsScore";
 
 const CARD =
   "mb-[14px] rounded-[14px] border border-[var(--border)] bg-[var(--bg-card)] p-5";
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+/**
+ * Textarea that grows to fit its full content — no clipping of long rewritten bullets.
+ * Uses a layout-effect to set height = scrollHeight after every render.
+ */
+function AutoResizeTextarea(
+  props: React.TextareaHTMLAttributes<HTMLTextAreaElement>,
+) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  });
+  return (
+    <textarea
+      {...props}
+      ref={ref}
+      style={{ overflowY: "hidden", ...props.style }}
+    />
+  );
 }
 
-function plainToEditorHtml(plain: string): string {
-  return escapeHtml(plain.replace(/\r\n/g, "\n")).replace(/\n/g, "<br>");
+/** Map final bullet blocks to pre-optimize text for inline highlight + undo. */
+function buildBulletPendingFromRewrites(
+  bulletBlocks: BulletBlock[],
+  rewrites: Array<{ original: string; rewritten: string }>,
+): Record<string, string> {
+  const pending: Record<string, string> = {};
+  const norm = (s: string) =>
+    s.replace(/\r\n/g, "\n").trim().replace(/\s+/g, " ");
+  for (const b of bulletBlocks) {
+    const joined = bulletJoined(b);
+    const rw = rewrites.find(
+      (r) =>
+        r.rewritten.trim().length > 0 &&
+        norm(r.rewritten) === norm(joined),
+    );
+    if (!rw) continue;
+    if (rw.original.trim() === rw.rewritten.trim()) continue;
+    if (!bulletTextChanged(rw.original, joined)) continue;
+    pending[b.id] = rw.original.replace(/\r\n/g, "\n").trimEnd();
+  }
+  return pending;
 }
 
-function clampScore(n: number): number {
-  return Math.min(100, Math.max(0, Math.round(n)));
+function buildPlainPendingAligned(
+  oldBlocks: ResumeBlock[],
+  newBlocks: ResumeBlock[],
+): Record<string, string> {
+  const pending: Record<string, string> = {};
+  let oi = 0;
+  let ni = 0;
+  while (oi < oldBlocks.length && ni < newBlocks.length) {
+    const ob = oldBlocks[oi]!;
+    const nb = newBlocks[ni]!;
+    if (ob.kind === nb.kind) {
+      if (ob.kind === "plain") {
+        const o = ob.lines.join("\n");
+        const nw = nb.lines.join("\n");
+        if (o.trim() !== nw.trim()) {
+          pending[nb.id] = o;
+        }
+      }
+      oi++;
+      ni++;
+      continue;
+    }
+    if (nb.kind === "plain" && ob.kind === "bullet") {
+      ni++;
+      continue;
+    }
+    if (nb.kind === "bullet" && ob.kind === "plain") {
+      oi++;
+      continue;
+    }
+    oi++;
+    ni++;
+  }
+  return pending;
+}
+
+const MILESTONES = [
+  { min: 0, label: "Start", unlock: "Optimize lines from the job" },
+  { min: 55, label: "Getting there", unlock: "Stronger ATS visibility" },
+  { min: 65, label: "Good", unlock: "Competitive for screeners" },
+  { min: 75, label: "Strong", unlock: "Passes most ATS filters" },
+  { min: 85, label: "Excellent", unlock: "Top bucket for matches" },
+] as const;
+
+function nextMilestone(score: number): (typeof MILESTONES)[number] {
+  for (const m of MILESTONES) {
+    if (score < m.min) return m;
+  }
+  return MILESTONES[MILESTONES.length - 1]!;
+}
+
+function milestoneBarLabels(): { pct: number; label: string }[] {
+  return [
+    { pct: 55, label: "55" },
+    { pct: 65, label: "65" },
+    { pct: 75, label: "75" },
+    { pct: 85, label: "85+" },
+  ];
 }
 
 function easeOutCubic(t: number): number {
@@ -44,36 +144,103 @@ function easeOutCubic(t: number): number {
 }
 
 function scoreHue(score: number): string {
-  if (score < 40) return "#ef4444";
-  if (score < 60) return "#f59e0b";
-  if (score < 75) return "#3b7eff";
-  return "#10b981";
+  if (score < 45) return "#ef4444";
+  if (score < 70) return "#7c3aed";
+  return "#059669";
 }
 
 function scoreStatusLabel(score: number): { text: string; color: string } {
-  if (score < 40) return { text: "Needs work", color: "#ef4444" };
-  if (score < 60) return { text: "Getting there", color: "#f59e0b" };
-  if (score < 75) return { text: "Looking good", color: "#3b7eff" };
-  if (score < 90) return { text: "Strong match", color: "#10b981" };
-  return { text: "Excellent match", color: "#10b981" };
+  if (score < 45) return { text: "Needs work", color: "#ef4444" };
+  if (score < 70) return { text: "Getting there", color: "#6d28d9" };
+  if (score < 90) return { text: "Strong match", color: "#059669" };
+  return { text: "Excellent match", color: "#047857" };
 }
 
-function scoreMotivationLine(score: number): string {
-  if (score < 40) return "Apply the rewrites below to boost your score";
-  if (score < 60)
-    return "You're close — a few fixes will make a big difference";
-  if (score < 75) return "Good match. Clean up the remaining keywords";
-  return "You're ready to apply with confidence";
+function normKwLabel(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-type ScoreResult = {
-  ats_score: number;
-  present_keywords: string[];
-  missing_keywords: string[];
-  reasoning: string;
+/**
+ * Matches /api/resume-optimize and /api/resume-editor-score: merge job + analyze keywords,
+ * then keep only phrases that appear in the job posting when the posting is long enough.
+ */
+function buildAtsKeywordsForResumeEditor(
+  jobPosting: string,
+  jobKeywordLabels: string[],
+  analysisKeywordSkills: string[] | undefined,
+): string[] {
+  const fromJob = filterAtsKeywordLabels(jobKeywordLabels);
+  const fromAnalysis = filterAtsKeywordLabels(analysisKeywordSkills ?? []);
+  const merged = [...new Set([...fromJob, ...fromAnalysis])];
+  const jd = jobPosting.replace(/\r\n/g, "\n").trim();
+  if (jd.length >= 40) {
+    return filterKeywordLabelsToJobPosting(jd, merged);
+  }
+  return merged;
+}
+
+function normSectionKeyFromLine(line: string): string {
+  return line.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function titleCaseFromHeaderLine(line: string): string {
+  const t = line.trim().toLowerCase();
+  return t.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function sectionHeaderKeys(blocks: ResumeBlock[]): Set<string> {
+  const s = new Set<string>();
+  for (const b of blocks) {
+    if (b.kind !== "plain") continue;
+    const first = b.lines[0]?.trim() ?? "";
+    if (isSectionHeader(first)) s.add(normSectionKeyFromLine(first));
+  }
+  return s;
+}
+
+function sectionTitlesAdded(
+  oldBlocks: ResumeBlock[],
+  newBlocks: ResumeBlock[],
+): string[] {
+  const oldKeys = sectionHeaderKeys(oldBlocks);
+  const out: string[] = [];
+  for (const b of newBlocks) {
+    if (b.kind !== "plain") continue;
+    const first = b.lines[0]?.trim() ?? "";
+    if (!isSectionHeader(first)) continue;
+    const k = normSectionKeyFromLine(first);
+    if (!oldKeys.has(k)) out.push(titleCaseFromHeaderLine(first));
+  }
+  return out;
+}
+
+function keywordsNewlyMatched(before: string[], after: string[]): string[] {
+  const bset = new Set(before.map(normKwLabel));
+  return after.filter((k) => !bset.has(normKwLabel(k)));
+}
+
+type OptimizeChangeSummary = {
+  bulletsRewritten: number;
+  keywordsAdded: string[];
+  sectionsAdded: string[];
+  scoreBefore: number;
+  scoreAfter: number | null;
+  biggestGap: string | null;
 };
 
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type CompetitiveAssessment = {
+  strength: string;
+  matchOn: string[];
+  gaps: string[];
+  recruiterAction: string;
+  assessment: string;
+};
+
+function formatKeywordListForSummary(keywords: string[], maxVisible = 8): string {
+  if (keywords.length === 0) return "";
+  if (keywords.length <= maxVisible) return keywords.join(", ");
+  return `${keywords.slice(0, maxVisible).join(", ")}, +${keywords.length - maxVisible} more`;
+}
 
 export function LiveResumeEditorExperience({
   variant = "page",
@@ -84,230 +251,74 @@ export function LiveResumeEditorExperience({
   onEmbeddedContinue?: () => void;
   onEmbeddedBack?: () => void;
 }) {
-  const { resume, setResume, jobPosting, baselineAnalysis } = useApplyfy();
+  const {
+    resume,
+    setResume,
+    jobPosting,
+    baselineAnalysis,
+    originalResumePlain,
+    jobKeywordLabels,
+    markResumeOptimized,
+    undoResumeOptimization,
+    committedHybridAtsScore,
+    committedHybridPresent,
+    committedHybridMissing,
+    ingestHybridAtsScore,
+    preOptimizationHybridAtsScore,
+    optimizationAppliedAt,
+    resumeSourceOfTruth,
+  } = useApplyfy();
 
-  const editorRef = useRef<HTMLDivElement>(null);
-  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const deltaHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countAnimRef = useRef<number | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const celebrationHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const steadyHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recalculateScoreRef = useRef<() => Promise<void>>(async () => {});
-  const appliedSetRef = useRef<Set<number>>(new Set());
-  const displayScoreRef = useRef(0);
-  const hoverCleanupRef = useRef<(() => void) | null>(null);
-  const suggestionCacheRef = useRef<Map<string, string[]>>(new Map());
+  const resumePayloadRef = useRef(resume);
+  resumePayloadRef.current = resume;
 
-  const resumeSnapRef = useRef(resume);
+  const analysisKey = baselineAnalysis
+    ? `${baselineAnalysis.matchScore}-${baselineAnalysis.atsScore}`
+    : "none";
 
-  const [loadingResume, setLoadingResume] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [blocks, setBlocks] = useState<ResumeBlock[]>([]);
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
+
+  const [initLoading, setInitLoading] = useState(true);
+  const [initError, setInitError] = useState<string | null>(null);
+
+  const [blockPending, setBlockPending] = useState<Record<string, string>>({});
+  const [undoSnapshot, setUndoSnapshot] = useState<string | null>(null);
+  const [optimizePhase, setOptimizePhase] = useState<
+    "idle" | "running" | "done"
+  >("idle");
+  const [optimizeProgress, setOptimizeProgress] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const [displayScore, setDisplayScore] = useState(0);
   const [presentKw, setPresentKw] = useState<string[]>([]);
   const [missingKw, setMissingKw] = useState<string[]>([]);
-  const [reasoning, setReasoning] = useState("");
-  const [hasRecalculatedOnce, setHasRecalculatedOnce] = useState(false);
-
-  const [scoring, setScoring] = useState(false);
-  const [scoringNote, setScoringNote] = useState<string | null>(null);
-  const [scoreError, setScoreError] = useState<string | null>(null);
-  const [deltaLabel, setDeltaLabel] = useState<string | null>(null);
-
-  const [appliedCards, setAppliedCards] = useState<Set<number>>(
-    () => new Set(),
-  );
-  const [checkAnimKey, setCheckAnimKey] = useState(0);
-  const cardBackupsRef = useRef<Map<number, string>>(new Map());
-
-  const [applyAllState, setApplyAllState] = useState<
-    "idle" | "loading" | "done"
-  >("idle");
-  const applyAllRunningRef = useRef(false);
-  const bulkScoreBeforeRef = useRef<number | null>(null);
-  const pendingBulkRecalcRef = useRef(false);
-
-  const [celebrationBanner, setCelebrationBanner] = useState<string | null>(
+  const [keywordStartCount, setKeywordStartCount] = useState<number | null>(
     null,
   );
-  const [steadyBanner, setSteadyBanner] = useState<string | null>(null);
-  const [scoreGlowPulse, setScoreGlowPulse] = useState(false);
+  const [scoring, setScoring] = useState(false);
+  const [scoreError, setScoreError] = useState<string | null>(null);
+  const [hasRecalculatedOnce, setHasRecalculatedOnce] = useState(false);
+  const [changeSummary, setChangeSummary] = useState<OptimizeChangeSummary | null>(
+    null,
+  );
+  /** From last /api/resume-optimize response — drives "What changed" bullet count. */
+  const [optimizeBulletsRewrittenCount, setOptimizeBulletsRewrittenCount] = useState<
+    number | null
+  >(null);
+  const [changeSummaryOpen, setChangeSummaryOpen] = useState(true);
+  const [tailoredForLabel, setTailoredForLabel] = useState<string | null>(null);
+  const [competitiveAssessment, setCompetitiveAssessment] =
+    useState<CompetitiveAssessment | null>(null);
+  const [competitiveLoading, setCompetitiveLoading] = useState(false);
 
-  const [kwTooltip, setKwTooltip] = useState<{
-    keyword: string;
-    left: number;
-    top: number;
-  } | null>(null);
-  const [kwSuggestionsLoading, setKwSuggestionsLoading] = useState(false);
-  const [kwSuggestions, setKwSuggestions] = useState<string[]>([]);
-  const kwTooltipRef = useRef<HTMLDivElement>(null);
+  const countAnimRef = useRef<number | null>(null);
+  const blockPendingRef = useRef(blockPending);
+  blockPendingRef.current = blockPending;
 
-  const [strengthAnimate, setStrengthAnimate] = useState(false);
-
-  const rewrites = baselineAnalysis?.rewrites ?? [];
-
-  resumeSnapRef.current = resume;
-  displayScoreRef.current = displayScore;
-  appliedSetRef.current = appliedCards;
-
-  useEffect(() => {
-    if (!baselineAnalysis) return;
-    const score = clampScore(Math.round(baselineAnalysis.atsScore));
-    try {
-      localStorage.setItem(LS_ATS_SCORE, String(score));
-    } catch {
-      /* ignore */
-    }
-    setDisplayScore(score);
-    setHasRecalculatedOnce(false);
-    setPresentKw([]);
-    setMissingKw(
-      baselineAnalysis.keywords
-        .filter((k) => !k.found)
-        .map((k) => k.skill),
-    );
-    setReasoning(
-      baselineAnalysis.matchExplanation?.[0]?.trim() ||
-        "Recalculate to refresh your ATS score against the current resume text.",
-    );
-    setApplyAllState("idle");
-    setAppliedCards(new Set());
-    cardBackupsRef.current = new Map();
-  }, [baselineAnalysis]);
-
-  useEffect(() => {
-    if (jobPosting.trim()) {
-      try {
-        localStorage.setItem(LS_JOB, jobPosting);
-      } catch {
-        /* ignore */
-      }
-    }
-  }, [jobPosting]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function init() {
-      setLoadingResume(true);
-      setLoadError(null);
-      try {
-        const stored = localStorage.getItem(LS_RESUME);
-        if (stored !== null && stored.trim().length > 0) {
-          if (!cancelled && editorRef.current) {
-            editorRef.current.innerHTML = plainToEditorHtml(stored);
-            setResume(stored);
-          }
-          if (!cancelled) setLoadingResume(false);
-          return;
-        }
-
-        const r = resumeSnapRef.current.trim();
-        if (!r) {
-          if (!cancelled) setLoadingResume(false);
-          return;
-        }
-
-        if (!r.toLowerCase().startsWith("data:")) {
-          if (!cancelled && editorRef.current) {
-            editorRef.current.innerHTML = plainToEditorHtml(
-              r.replace(/\r\n/g, "\n"),
-            );
-          }
-          if (!cancelled) setLoadingResume(false);
-          return;
-        }
-
-        const res = await fetch("/api/resume-plain", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ resume: r }),
-        });
-        const data = (await res.json()) as { text?: string; error?: string };
-        if (!res.ok) {
-          throw new Error(data.error ?? "Could not load resume text.");
-        }
-        const text = (data.text ?? "").trim();
-        if (!cancelled && editorRef.current) {
-          editorRef.current.innerHTML = text
-            ? plainToEditorHtml(text)
-            : "";
-          if (text) {
-            try {
-              localStorage.setItem(LS_RESUME, text);
-            } catch {
-              /* ignore */
-            }
-            setResume(text);
-          }
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setLoadError(
-            e instanceof Error ? e.message : "Could not load resume.",
-          );
-        }
-      } finally {
-        if (!cancelled) setLoadingResume(false);
-      }
-    }
-    void init();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
-  }, [setResume]);
-
-  useEffect(() => {
-    if (loadingResume) return;
-    const el = editorRef.current;
-    if (!el || el.innerText.trim().length > 0) return;
-    const stored = localStorage.getItem(LS_RESUME);
-    if (stored !== null && stored.trim().length > 0) return;
-    const r = resume.trim();
-    if (!r || r.toLowerCase().startsWith("data:")) return;
-    el.innerHTML = plainToEditorHtml(r.replace(/\r\n/g, "\n"));
-  }, [resume, loadingResume]);
-
-  useEffect(() => {
-    const t = requestAnimationFrame(() => setStrengthAnimate(true));
-    return () => cancelAnimationFrame(t);
-  }, [baselineAnalysis?.atsScore, hasRecalculatedOnce, presentKw.length]);
-
-  useEffect(() => {
-    if (!kwTooltip) return;
-    const close = (e: MouseEvent) => {
-      if (kwTooltipRef.current?.contains(e.target as Node)) return;
-      setKwTooltip(null);
-      setKwSuggestions([]);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [kwTooltip]);
-
-  const persistEditorToStorage = useCallback(() => {
-    const el = editorRef.current;
-    if (!el) return;
-    const plain = el.innerText.replace(/\r\n/g, "\n");
-    try {
-      localStorage.setItem(LS_RESUME, plain);
-    } catch {
-      /* ignore */
-    }
-    setResume(plain);
-  }, [setResume]);
-
-  const onEditorInput = useCallback(() => {
-    if (hoverCleanupRef.current) {
-      hoverCleanupRef.current();
-      hoverCleanupRef.current = null;
-    }
-    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
-    persistTimerRef.current = setTimeout(() => {
-      persistTimerRef.current = null;
-      persistEditorToStorage();
-    }, 400);
-  }, [persistEditorToStorage]);
+  /** Current editor resume (optimized bullets + manual edits). Never use originalResumePlain for scoring. */
+  const optimizedResumeText = useMemo(() => blocksToPlain(blocks), [blocks]);
 
   const animateScoreTo = useCallback((target: number, start: number) => {
     if (countAnimRef.current !== null) {
@@ -329,478 +340,633 @@ export function LiveResumeEditorExperience({
     countAnimRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const recalculateScore = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor || scoring) {
-      // #region agent log
-      fetch("http://127.0.0.1:7677/ingest/8db16057-cb80-4431-9287-3e6d24985fec", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "67af35",
-        },
-        body: JSON.stringify({
-          sessionId: "67af35",
-          hypothesisId: "H5",
-          location: "LiveResumeEditorExperience.tsx:recalculateScore",
-          message: "recalc early return",
-          data: { hasEditor: !!editor, scoring },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
+  const prevCommittedHybridScoreRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (committedHybridAtsScore === null) {
+      prevCommittedHybridScoreRef.current = null;
+      if (countAnimRef.current !== null) {
+        cancelAnimationFrame(countAnimRef.current);
+        countAnimRef.current = null;
+      }
+      setPresentKw([]);
+      setMissingKw([]);
+      setDisplayScore(0);
+      try {
+        localStorage.removeItem(LS_ATS_SCORE);
+      } catch {
+        /* ignore */
+      }
       return;
     }
+    setPresentKw(committedHybridPresent);
+    setMissingKw(committedHybridMissing);
+    setKeywordStartCount((prev) =>
+      prev === null ? committedHybridPresent.length : prev,
+    );
+    try {
+      localStorage.setItem(LS_ATS_SCORE, String(committedHybridAtsScore));
+    } catch {
+      /* ignore */
+    }
+    const prev = prevCommittedHybridScoreRef.current;
+    prevCommittedHybridScoreRef.current = committedHybridAtsScore;
+    if (prev === null || prev === committedHybridAtsScore) {
+      if (countAnimRef.current !== null) {
+        cancelAnimationFrame(countAnimRef.current);
+        countAnimRef.current = null;
+      }
+      setDisplayScore(committedHybridAtsScore);
+      return;
+    }
+    animateScoreTo(committedHybridAtsScore, prev);
+  }, [
+    committedHybridAtsScore,
+    committedHybridPresent,
+    committedHybridMissing,
+    animateScoreTo,
+  ]);
 
-    const resumeText = editor.innerText.replace(/\r\n/g, "\n").trim();
+  useEffect(() => {
+    if (jobPosting.trim()) {
+      try {
+        localStorage.setItem(LS_JOB, jobPosting);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [jobPosting]);
+
+  useEffect(() => {
+    purgeResumeEditorBrowserStorage();
+    let cancelled = false;
+    (async () => {
+      setInitLoading(true);
+      setInitError(null);
+      const payload = resumePayloadRef.current.trim();
+      const origPlain = originalResumePlain.trim();
+      if (!payload && !origPlain) {
+        setBlocks([]);
+        setInitLoading(false);
+        return;
+      }
+      try {
+        let p = "";
+        if (payload.startsWith("data:")) {
+          if (origPlain) {
+            p = origPlain;
+          } else {
+            const res = await fetch("/api/resume-plain", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ resume: payload }),
+            });
+            const data = (await res.json()) as { text?: string; error?: string };
+            if (!res.ok) {
+              throw new Error(data.error ?? "Could not parse resume.");
+            }
+            p = (data.text ?? "").trim();
+          }
+        } else {
+          // Plain-text resume in context — always wins over immutable upload text
+          // so remounts and reloads keep Optimize / manual edits.
+          p = (payload || origPlain).trim();
+          if (!p) {
+            setBlocks([]);
+            setInitLoading(false);
+            return;
+          }
+        }
+        p = purgeFabricatedResumeLines(p, p);
+        // Strip any legacy "Tailored for:" line from the resume body (now shown as a UI badge only).
+        p = p.replace(/^[ \t]*Tailored for:.*\r?\n?/im, "").replace(/\n{3,}/g, "\n\n").trim();
+        if (cancelled) return;
+        const nextBlocks = parseResumeIntoBlocks(p);
+        setBlocks(nextBlocks);
+        setResume(p);
+        setBlockPending({});
+        setUndoSnapshot(null);
+        setOptimizePhase("idle");
+        setChangeSummary(null);
+      } catch (e) {
+        if (!cancelled) {
+          setInitError(
+            e instanceof Error ? e.message : "Could not load resume text.",
+          );
+        }
+      } finally {
+        if (!cancelled) setInitLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [analysisKey, originalResumePlain, setResume]);
+
+  useEffect(() => {
+    if (!baselineAnalysis) {
+      setKeywordStartCount(null);
+    }
+  }, [baselineAnalysis]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 4500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const updatePlainBlock = useCallback(
+    (id: string, joined: string) => {
+      let nextPlain = "";
+      setBlocks((prev) => {
+        const next = prev.map((b) =>
+          b.id === id && b.kind === "plain"
+            ? { ...b, lines: joined.split("\n") }
+            : b,
+        );
+        nextPlain = blocksToPlain(next);
+        return next;
+      });
+      setResume(nextPlain);
+      setBlockPending((p) => {
+        if (!(id in p)) return p;
+        const n = { ...p };
+        delete n[id];
+        return n;
+      });
+    },
+    [setResume],
+  );
+
+  const updateBulletBlock = useCallback(
+    (id: string, joined: string) => {
+      let nextPlain = "";
+      setBlocks((prev) => {
+        const next = prev.map((b) =>
+          b.id === id && b.kind === "bullet"
+            ? { ...b, lines: joined.split("\n") }
+            : b,
+        );
+        nextPlain = blocksToPlain(next);
+        return next;
+      });
+      setResume(nextPlain);
+      setBlockPending((p) => {
+        if (!(id in p)) return p;
+        const n = { ...p };
+        delete n[id];
+        return n;
+      });
+    },
+    [setResume],
+  );
+
+  const keepBlock = useCallback((id: string) => {
+    setBlockPending((prev) => {
+      const n = { ...prev };
+      delete n[id];
+      return n;
+    });
+  }, []);
+
+  const undoBlock = useCallback(
+    (id: string) => {
+      const before = blockPendingRef.current[id];
+      if (before === undefined) return;
+      let nextPlain = "";
+      setBlocks((prevBlocks) => {
+        const next = prevBlocks.map((b) =>
+          b.id === id ? { ...b, lines: before.split("\n") } : b,
+        );
+        nextPlain = blocksToPlain(next);
+        return next;
+      });
+      setResume(nextPlain);
+      setBlockPending((prev) => {
+        if (prev[id] === undefined) return prev;
+        const n = { ...prev };
+        delete n[id];
+        return n;
+      });
+    },
+    [setResume],
+  );
+
+  const undoAllOptimize = useCallback(() => {
+    if (!undoSnapshot) return;
+    const nextBlocks = parseResumeIntoBlocks(undoSnapshot);
+    setBlocks(nextBlocks);
+    setResume(undoSnapshot);
+    setBlockPending({});
+    setUndoSnapshot(null);
+    setOptimizePhase("idle");
+    setChangeSummary(null);
+    setOptimizeBulletsRewrittenCount(null);
+    setTailoredForLabel(null);
+    setCompetitiveAssessment(null);
+    undoResumeOptimization();
+  }, [undoSnapshot, setResume, undoResumeOptimization]);
+
+  const recalculateScore = useCallback(
+    async (
+      resumePlainOverride?: string,
+      opts?: {
+        quiet?: boolean;
+        ingestAs?: "recalc" | "optimize";
+        skipCompetitive?: boolean;
+      },
+    ): Promise<{
+      presentAfter: string[];
+      freshAtsScore: number | null;
+    } | null> => {
+      const text = (
+        resumePlainOverride ?? blocksToPlain(blocksRef.current)
+      ).trim();
+      const job =
+        jobPosting.trim() ||
+        (typeof window !== "undefined"
+          ? localStorage.getItem(LS_JOB)?.trim() ?? ""
+          : "");
+      if (text.length < 10) {
+        if (!opts?.quiet) setScoreError("Add resume text before scoring.");
+        return null;
+      }
+      if (!job.trim()) {
+        if (!opts?.quiet) {
+          setScoreError("Job posting is missing. Go back to Analyze.");
+        }
+        return null;
+      }
+      const atsKeywords = buildAtsKeywordsForResumeEditor(
+        job,
+        jobKeywordLabels,
+        baselineAnalysis?.keywords.map((k) => k.skill),
+      );
+      const ingestAs = opts?.ingestAs ?? "recalc";
+
+      if (!opts?.quiet) {
+        setScoring(true);
+        setScoreError(null);
+        setCompetitiveLoading(true);
+      }
+
+      const maybeFetchCompetitive = () => {
+        if (opts?.skipCompetitive) {
+          if (!opts?.quiet) setCompetitiveLoading(false);
+          return;
+        }
+        void (async () => {
+          try {
+            const caRes = await fetch("/api/resume-competitive-assessment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              cache: "no-store",
+              body: JSON.stringify({ resumeText: text, jobDescription: job }),
+            });
+            const caRaw = await caRes.text();
+            const caData = JSON.parse(caRaw) as {
+              assessment?: CompetitiveAssessment | null;
+            };
+            if (caRes.ok && caData.assessment) {
+              setCompetitiveAssessment(caData.assessment);
+            }
+          } catch {
+            /* non-fatal */
+          } finally {
+            if (!opts?.quiet) setCompetitiveLoading(false);
+          }
+        })();
+      };
+
+      let presentAfter: string[] = [];
+      let freshAtsScore: number | null = null;
+
+      const applyFallbackIngest = () => {
+        const ver = verifyKeywordsAgainstResume(text, atsKeywords, null);
+        presentAfter = ver.present;
+        const q25Fallback = 10;
+        const compositeFb = Math.min(
+          100,
+          Math.max(0, Math.round(ver.score75 + q25Fallback)),
+        );
+        freshAtsScore = compositeFb;
+        ingestHybridAtsScore(
+          {
+            ats_score: Math.min(100, Math.round(ver.score75 + q25Fallback)),
+            present_keywords: ver.present,
+            missing_keywords: ver.missing,
+            quality_score_25: q25Fallback,
+            resumePlainVerified: text,
+            keywordLabelsVerified: atsKeywords,
+          },
+          ingestAs,
+        );
+      };
+
+      try {
+        if (process.env.NODE_ENV === "development" && !opts?.quiet) {
+          console.info("[resume-editor-score client] resumeText sent to API", {
+            charLength: text.length,
+            head: text.slice(0, 200),
+            tail: text.slice(-200),
+          });
+        }
+        const res = await fetch("/api/resume-editor-score", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({
+            resumeText: text,
+            jobPosting: job,
+            atsKeywords,
+          }),
+        });
+        const raw = await res.text();
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw) as unknown;
+        } catch {
+          if (!opts?.quiet) throw new Error("Invalid response");
+          applyFallbackIngest();
+          maybeFetchCompetitive();
+          return { presentAfter, freshAtsScore };
+        }
+        const o = parsed as { result?: HybridAtsPayload; error?: string };
+        if (res.ok && o.result) {
+          const r = o.result;
+          const codeVerified = verifyKeywordsAgainstResume(
+            text,
+            atsKeywords,
+            null,
+          );
+          presentAfter = codeVerified.present;
+          let q25 =
+            typeof r.quality_score_25 === "number" &&
+            Number.isFinite(r.quality_score_25)
+              ? Math.round(r.quality_score_25)
+              : Math.round(r.ats_score - codeVerified.score75);
+          q25 = Math.min(25, Math.max(0, q25));
+          const composite = Math.min(
+            100,
+            Math.max(0, Math.round(codeVerified.score75 + q25)),
+          );
+          freshAtsScore = composite;
+          ingestHybridAtsScore(
+            {
+              ...r,
+              resumePlainVerified: text,
+              keywordLabelsVerified: atsKeywords,
+            },
+            ingestAs,
+          );
+        } else {
+          applyFallbackIngest();
+        }
+
+        if (!opts?.quiet) setHasRecalculatedOnce(true);
+        maybeFetchCompetitive();
+        return { presentAfter, freshAtsScore };
+      } catch (e) {
+        if (!opts?.quiet) {
+          setScoreError(
+            e instanceof Error ? e.message : "Score update failed.",
+          );
+        }
+        applyFallbackIngest();
+        maybeFetchCompetitive();
+        return { presentAfter, freshAtsScore };
+      } finally {
+        if (!opts?.quiet) setScoring(false);
+      }
+    },
+    [jobPosting, baselineAnalysis, jobKeywordLabels, ingestHybridAtsScore],
+  );
+
+  const runOptimize = useCallback(async () => {
+    if (optimizePhase === "running" || initLoading) return;
+    const snapshot = blocksToPlain(blocks);
     const job =
       jobPosting.trim() ||
       (typeof window !== "undefined"
         ? localStorage.getItem(LS_JOB)?.trim() ?? ""
         : "");
-
-    if (resumeText.length < 10) {
-      setScoreError("Add resume text before scoring.");
-      return;
-    }
-    if (job.length < 40) {
-      setScoreError("Job posting is missing. Go back to Analyze.");
-      return;
-    }
-
-    setScoring(true);
-    setScoreError(null);
-    if (pendingBulkRecalcRef.current) {
-      setScoringNote("Recalculating with improvements...");
-    } else {
-      setScoringNote(null);
-    }
-    const prev = displayScore;
-
+    const jobTitleForApi = extractJobTitleFromPosting(job);
+    const atsKeywords = buildAtsKeywordsForResumeEditor(
+      job,
+      jobKeywordLabels,
+      baselineAnalysis?.keywords.map((k) => k.skill),
+    );
+    // Same label set + literal scan as post-optimize; snapshot is frozen pre-optimize text.
+    const keywordsPresentBefore = verifyKeywordsAgainstResume(
+      snapshot,
+      atsKeywords,
+      null,
+    ).present;
+    // Capture the pre-optimization keyword count so the panel shows the
+    // real "Before optimization: X keywords" value, not 0.
+    setKeywordStartCount(keywordsPresentBefore.length);
+    const blocksBeforeOptimize = parseResumeIntoBlocks(snapshot);
+    const scoreBeforeSnapshot =
+      committedHybridAtsScore !== null ? committedHybridAtsScore : displayScore;
+    setUndoSnapshot(snapshot);
+    setChangeSummary(null);
+    setOptimizeBulletsRewrittenCount(null);
+    setOptimizePhase("running");
+    setBlockPending({});
+    setOptimizeProgress(
+      "Rewriting bullets (gpt-4o) → summary → quantification & verb polish → competitive assessment…",
+    );
+    const analysisSnapshot = baselineAnalysis;
     try {
-      const res = await fetch("/api/resume-editor-score", {
+      const res = await fetch("/api/resume-optimize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        cache: "no-store",
         body: JSON.stringify({
-          resumeText,
-          jobPosting: job,
-          previousScore: prev,
+          resumeText: snapshot,
+          jobDescription: job,
+          atsKeywords,
+          jobTitle: jobTitleForApi,
         }),
       });
-
-      const raw = await res.text();
-      let data: unknown;
-      try {
-        data = JSON.parse(raw) as unknown;
-      } catch {
-        console.error("[resume-editor] score response not JSON", raw.slice(0, 400));
-        throw new Error("Invalid response");
+      const data = (await res.json()) as {
+        optimizedResume?: string;
+        tailoredForTitle?: string | null;
+        rewrittenBullets?: Array<{
+          original: string;
+          rewritten: string;
+        }>;
+        bulletsRewrittenCount?: number;
+        competitiveAssessment?: CompetitiveAssessment | null;
+        biggestGap?: string | null;
+        error?: string;
+      };
+      if (!res.ok || typeof data.optimizedResume !== "string") {
+        throw new Error(data.error ?? "Optimization failed.");
       }
-
-      console.log("[resume-editor] score API full response", {
-        status: res.status,
-        body: data,
-      });
-
-      const o = data as { result?: ScoreResult; error?: string };
-      if (!res.ok || !o.result) {
-        // #region agent log
-        fetch("http://127.0.0.1:7677/ingest/8db16057-cb80-4431-9287-3e6d24985fec", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "67af35",
-          },
-          body: JSON.stringify({
-            sessionId: "67af35",
-            hypothesisId: "H4",
-            location: "LiveResumeEditorExperience.tsx:recalculateScore",
-            message: "score API not ok",
-            data: {
-              status: res.status,
-              errSnippet: (o.error ?? "").slice(0, 120),
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-        // #endregion
-        throw new Error(o.error ?? "Score update failed.");
+      const bulletsRewrittenFromApi =
+        typeof data.bulletsRewrittenCount === "number" &&
+        Number.isFinite(data.bulletsRewrittenCount)
+          ? Math.max(0, Math.round(data.bulletsRewrittenCount))
+          : 0;
+      setOptimizeBulletsRewrittenCount(bulletsRewrittenFromApi);
+      let text = data.optimizedResume.trim();
+      text = purgeFabricatedResumeLines(text, text);
+      // Safety net: strip any remaining "Tailored for:" line the model may have injected.
+      text = text.replace(/^[ \t]*Tailored for:.*\r?\n?/im, "").replace(/\n{3,}/g, "\n\n").trim();
+      const titleLabel =
+        typeof data.tailoredForTitle === "string" && data.tailoredForTitle.trim()
+          ? data.tailoredForTitle.trim()
+          : jobTitleForApi.trim();
+      setTailoredForLabel(titleLabel || null);
+      if (data.competitiveAssessment) {
+        setCompetitiveAssessment(data.competitiveAssessment);
       }
-
-      const r = o.result;
-      const d = r.ats_score - prev;
-      if (d !== 0) {
-        setDeltaLabel(
-          d > 0 ? `+${d} from last score` : `${d} from last score`,
-        );
-        if (deltaHideRef.current) clearTimeout(deltaHideRef.current);
-        deltaHideRef.current = setTimeout(() => {
-          setDeltaLabel(null);
-          deltaHideRef.current = null;
-        }, 5000);
-      } else {
-        setDeltaLabel(null);
+      const nextBlocks = parseResumeIntoBlocks(text);
+      setBlocks(nextBlocks);
+      setResume(text);
+      let rw = Array.isArray(data.rewrittenBullets)
+        ? data.rewrittenBullets
+        : [];
+      if (rw.length === 0) {
+        rw = pairBulletRewritesAligned(snapshot, text);
       }
-
-      animateScoreTo(r.ats_score, prev);
-      setPresentKw(r.present_keywords);
-      setMissingKw(r.missing_keywords);
-      setReasoning(r.reasoning || "");
-      setHasRecalculatedOnce(true);
-      try {
-        localStorage.setItem(LS_ATS_SCORE, String(r.ats_score));
-      } catch {
-        /* ignore */
-      }
-      persistEditorToStorage();
-
-      if (pendingBulkRecalcRef.current && bulkScoreBeforeRef.current !== null) {
-        const before = bulkScoreBeforeRef.current;
-        if (r.ats_score > before) {
-          setScoreGlowPulse(true);
-          setTimeout(() => setScoreGlowPulse(false), 700);
-          setCelebrationBanner(
-            `🎉 Your score improved by +${r.ats_score - before} points!`,
-          );
-          if (celebrationHideRef.current) clearTimeout(celebrationHideRef.current);
-          celebrationHideRef.current = setTimeout(() => {
-            setCelebrationBanner(null);
-            celebrationHideRef.current = null;
-          }, 4000);
-        } else {
-          setSteadyBanner(
-            "Score held steady. Your resume is now better worded — recalculate again after adding keywords.",
-          );
-          if (steadyHideRef.current) clearTimeout(steadyHideRef.current);
-          steadyHideRef.current = setTimeout(() => {
-            setSteadyBanner(null);
-            steadyHideRef.current = null;
-          }, 6000);
-        }
-      }
-      pendingBulkRecalcRef.current = false;
-      bulkScoreBeforeRef.current = null;
-    } catch (e) {
-      console.error("[resume-editor] score error", e);
-      setScoreError(
-        "Score update failed. Your last score is shown.",
+      const bulletBlocks = nextBlocks.filter(
+        (b): b is BulletBlock => b.kind === "bullet",
       );
-      pendingBulkRecalcRef.current = false;
-      bulkScoreBeforeRef.current = null;
+      const bulletPending = buildBulletPendingFromRewrites(bulletBlocks, rw);
+      const plainPending = buildPlainPendingAligned(
+        parseResumeIntoBlocks(snapshot),
+        nextBlocks,
+      );
+      setBlockPending({ ...bulletPending, ...plainPending });
+
+      const scoreOutcome = await recalculateScore(text, {
+        quiet: true,
+        ingestAs: "optimize",
+        skipCompetitive: true,
+      });
+      const presentAfterList =
+        scoreOutcome?.presentAfter ?? keywordsPresentBefore;
+      const scoreAfterNum = scoreOutcome?.freshAtsScore ?? null;
+
+      markResumeOptimized({
+        resumePlainBefore: snapshot,
+        analysisSnapshot,
+      });
+      setOptimizePhase("done");
+      const kwAdded = keywordsNewlyMatched(
+        keywordsPresentBefore,
+        presentAfterList,
+      );
+      const sectionsAdded = sectionTitlesAdded(blocksBeforeOptimize, nextBlocks);
+      const biggestGap =
+        typeof data.biggestGap === "string" && data.biggestGap.trim()
+          ? data.biggestGap.trim()
+          : null;
+      setChangeSummary({
+        bulletsRewritten: bulletsRewrittenFromApi,
+        keywordsAdded: kwAdded,
+        sectionsAdded,
+        scoreBefore: scoreBeforeSnapshot,
+        scoreAfter: scoreAfterNum,
+        biggestGap,
+      });
+      setChangeSummaryOpen(true);
+      setToast(
+        `${bulletsRewrittenFromApi} bullets rewritten · ATS score updated`,
+      );
+    } catch (e) {
+      setOptimizePhase("idle");
+      setChangeSummary(null);
+      setOptimizeBulletsRewrittenCount(null);
+      setToast(e instanceof Error ? e.message : "Optimization failed.");
     } finally {
-      setScoring(false);
-      setScoringNote(null);
+      setOptimizeProgress(null);
     }
   }, [
-    scoring,
+    blocks,
+    optimizePhase,
+    initLoading,
     jobPosting,
+    baselineAnalysis,
+    jobKeywordLabels,
+    markResumeOptimized,
+    setResume,
+    recalculateScore,
+    committedHybridAtsScore,
     displayScore,
-    animateScoreTo,
-    persistEditorToStorage,
   ]);
 
-  useEffect(() => {
-    recalculateScoreRef.current = recalculateScore;
-  }, [recalculateScore]);
-
-  const onRewriteApply = useCallback(
-    (cardIndex: number, originalText: string, rewrittenText: string) => {
-      const editor = document.getElementById(
-        "resume-editor",
-      ) as HTMLDivElement | null;
-      if (!editor) return;
-
-      if (flashTimerRef.current) {
-        clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = null;
-      }
-
-      const backup = editor.innerHTML;
-      const ok = findAndReplaceInResumeEditor(
-        editor,
-        originalText,
-        rewrittenText,
-      );
-
-      if (!ok) {
-        return;
-      }
-
-      cardBackupsRef.current.set(cardIndex, backup);
-      setAppliedCards((s) => new Set(s).add(cardIndex));
-      setCheckAnimKey((k) => k + 1);
-      persistEditorToStorage();
-
-      scheduleRemoveJustAppliedClass(editor, 2000);
-
-      requestAnimationFrame(() => {
-        editor
-          .querySelector(".just-applied")
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
-      });
-    },
-    [persistEditorToStorage],
-  );
-
-  const onRewriteUndo = useCallback(
-    (cardIndex: number) => {
-      const editor = document.getElementById(
-        "resume-editor",
-      ) as HTMLDivElement | null;
-      const backup = cardBackupsRef.current.get(cardIndex);
-      if (!editor || backup === undefined) return;
-
-      editor.innerHTML = backup;
-      editor.classList.add("re-flash-red");
-      window.setTimeout(() => editor.classList.remove("re-flash-red"), 1000);
-
-      cardBackupsRef.current.delete(cardIndex);
-      setAppliedCards((s) => {
-        const n = new Set(s);
-        n.delete(cardIndex);
-        return n;
-      });
-      persistEditorToStorage();
-    },
-    [persistEditorToStorage],
-  );
-
-  const onRewriteCardEnter = useCallback(
-    (originalText: string) => {
-      const editor = document.getElementById(
-        "resume-editor",
-      ) as HTMLElement | null;
-      if (!editor) return;
-      if (hoverCleanupRef.current) {
-        hoverCleanupRef.current();
-        hoverCleanupRef.current = null;
-      }
-      const cleanup = highlightRewriteInEditor(editor, originalText);
-      hoverCleanupRef.current = cleanup;
-    },
-    [],
-  );
-
-  const onRewriteCardLeave = useCallback(() => {
-    if (hoverCleanupRef.current) {
-      hoverCleanupRef.current();
-      hoverCleanupRef.current = null;
+  const onPrimaryButtonClick = useCallback(() => {
+    const shouldRecalculate =
+      optimizePhase === "done" ||
+      (optimizePhase === "idle" &&
+        optimizationAppliedAt !== null &&
+        resumeSourceOfTruth === "optimized");
+    if (shouldRecalculate) {
+      void recalculateScore();
+      return;
     }
-  }, []);
-
-  const openKeywordTooltip = useCallback(
-    async (keyword: string, anchor: HTMLElement) => {
-      const r = anchor.getBoundingClientRect();
-      setKwTooltip({
-        keyword,
-        left: r.left,
-        top: r.bottom + 6,
-      });
-      const cached = suggestionCacheRef.current.get(keyword);
-      if (cached) {
-        setKwSuggestions(cached);
-        setKwSuggestionsLoading(false);
-        return;
-      }
-      setKwSuggestions([]);
-      setKwSuggestionsLoading(true);
-      const jobTitle =
-        jobPosting.split("\n").find((l) => l.trim().length > 0)?.trim().slice(0, 200) ||
-        "professional";
-      try {
-        const res = await fetch("/api/keyword-suggestions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ keyword, jobTitle }),
-        });
-        const data = (await res.json()) as {
-          suggestions?: string[];
-          error?: string;
-        };
-        if (!res.ok || !data.suggestions?.length) {
-          throw new Error(data.error ?? "Failed");
-        }
-        suggestionCacheRef.current.set(keyword, data.suggestions);
-        setKwSuggestions(data.suggestions);
-      } catch (e) {
-        console.error("[resume-editor] keyword suggestions", e);
-        setKwSuggestions([]);
-      } finally {
-        setKwSuggestionsLoading(false);
-      }
-    },
-    [jobPosting],
-  );
-
-  const addSuggestionToResume = useCallback(
-    (sentence: string) => {
-      const editor = editorRef.current;
-      if (!editor) return;
-      const plain = editor.innerText.replace(/\r\n/g, "\n");
-      const next = appendSentenceToResume(plain, sentence);
-      editor.innerHTML = plainToEditorHtml(next);
-      persistEditorToStorage();
-      setKwTooltip(null);
-      setKwSuggestions([]);
-    },
-    [persistEditorToStorage],
-  );
-
-  const handleApplyAll = useCallback(async () => {
-    if (applyAllRunningRef.current || rewrites.length === 0) return;
-    const editor = document.getElementById(
-      "resume-editor",
-    ) as HTMLDivElement | null;
-    if (!editor) return;
-
-    applyAllRunningRef.current = true;
-    setApplyAllState("loading");
-
-    for (let i = 0; i < rewrites.length; i++) {
-      await delay(400);
-      if (appliedSetRef.current.has(i)) continue;
-
-      const { original, rewritten } = rewrites[i]!;
-      const backup = editor.innerHTML;
-      const ok = findAndReplaceInResumeEditor(editor, original, rewritten);
-      if (ok) {
-        cardBackupsRef.current.set(i, backup);
-        setAppliedCards((s) => new Set(s).add(i));
-        setCheckAnimKey((k) => k + 1);
-        scheduleRemoveJustAppliedClass(editor, 2000);
-        requestAnimationFrame(() => {
-          editor
-            .querySelector(".just-applied")
-            ?.scrollIntoView({ block: "center", behavior: "smooth" });
-        });
-      }
-      persistEditorToStorage();
-    }
-
-    setApplyAllState("done");
-    applyAllRunningRef.current = false;
-
-    await delay(800);
-    bulkScoreBeforeRef.current = displayScoreRef.current;
-    pendingBulkRecalcRef.current = true;
-    // #region agent log
-    fetch("http://127.0.0.1:7677/ingest/8db16057-cb80-4431-9287-3e6d24985fec", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "67af35",
-      },
-      body: JSON.stringify({
-        sessionId: "67af35",
-        hypothesisId: "H5",
-        location: "LiveResumeEditorExperience.tsx:handleApplyAll",
-        message: "invoking recalculate after apply all",
-        data: { bulkScoreBefore: displayScoreRef.current },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
-    await recalculateScoreRef.current();
-  }, [rewrites]);
+    void runOptimize();
+  }, [
+    optimizePhase,
+    optimizationAppliedAt,
+    resumeSourceOfTruth,
+    recalculateScore,
+    runOptimize,
+  ]);
 
   const downloadTxt = useCallback(() => {
-    const el = editorRef.current;
-    const plain = el ? el.innerText.replace(/\r\n/g, "\n") : "";
-    const blob = new Blob([plain], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([optimizedResumeText], {
+      type: "text/plain;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = "resume-edited.txt";
     a.click();
     URL.revokeObjectURL(url);
-  }, []);
+  }, [optimizedResumeText]);
 
-  const groupedRewrites = useMemo(() => {
-    const m = new Map<
-      string,
-      {
-        globalIdx: number;
-        originalText: string;
-        rewrittenText: string;
-        explanation: string;
-      }[]
-    >();
-    rewrites.forEach((r, globalIdx) => {
-      const label = (r.section ?? "Other").trim() || "Other";
-      if (!m.has(label)) m.set(label, []);
-      m.get(label)!.push({
-        globalIdx,
-        originalText: r.original,
-        rewrittenText: r.rewritten,
-        explanation: r.whyBetter,
-      });
-    });
-    return [...m.entries()];
-  }, [rewrites]);
-
-  const jobTitleLine = useMemo(() => {
-    return (
-      jobPosting.split("\n").find((l) => l.trim().length > 0)?.trim().slice(0, 200) ||
-      "Professional"
-    );
-  }, [jobPosting]);
-
-  const strengthMeters = useMemo(() => {
-    if (!baselineAnalysis) {
-      return { kw: 0, exp: 0, overall: 0 };
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const downloadPdf = useCallback(async () => {
+    if (pdfDownloading) return;
+    setPdfDownloading(true);
+    try {
+      await downloadResumePdf(optimizedResumeText, "resume.pdf");
+    } catch (e) {
+      console.error("[pdf-export]", e);
+    } finally {
+      setPdfDownloading(false);
     }
-    const totalKw = presentKw.length + missingKw.length;
-    const kwPct =
-      totalKw > 0
-        ? Math.round((100 * presentKw.length) / totalKw)
-        : Math.round(
-            (100 *
-              baselineAnalysis.keywords.filter((k) => k.found).length) /
-              Math.max(1, baselineAnalysis.keywords.length),
-          );
-    const exp = clampScore(Math.round(baselineAnalysis.experienceMatch));
-    const overall = clampScore(
-      Math.round((displayScore + baselineAnalysis.matchScore) / 2),
-    );
-    return { kw: kwPct, exp, overall };
-  }, [baselineAnalysis, presentKw.length, missingKw.length, displayScore]);
+  }, [optimizedResumeText, pdfDownloading]);
 
   const status = scoreStatusLabel(displayScore);
-  const motivation = scoreMotivationLine(displayScore);
+  const hasPendingAi = Object.keys(blockPending).length > 0;
+  const isOptimizedSession =
+    optimizationAppliedAt !== null && resumeSourceOfTruth === "optimized";
+  const primaryShowsOptimized =
+    optimizePhase === "done" ||
+    (optimizePhase === "idle" && isOptimizedSession);
+  const showUndoAll =
+    undoSnapshot !== null && (primaryShowsOptimized || hasPendingAi);
 
   const bottomBar = (
     <div
-      className={`flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] bg-[var(--bg-card)] px-6 py-4 ${
-        variant === "page"
-          ? "fixed inset-x-0 bottom-0 z-50"
-          : "mt-8 rounded-xl border border-[var(--border)]"
+      className={`flex flex-col gap-4 border-t border-[var(--border)] bg-[var(--bg-card)] px-6 py-4 sm:flex-row sm:items-center sm:justify-between ${
+        variant === "page" ? "fixed bottom-0 left-0 right-0 z-50" : ""
       }`}
-      style={
-        variant === "page"
-          ? { paddingBottom: "max(16px, env(safe-area-inset-bottom))" }
-          : undefined
-      }
     >
-      {variant === "page" ? (
-        <Link
-          href="/analyze"
-          className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-primary)]"
-        >
-          ← Back to Analyze
-        </Link>
-      ) : onEmbeddedBack ? (
-        <button
-          type="button"
-          onClick={onEmbeddedBack}
-          className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-primary)]"
-        >
-          ← Back
-        </button>
-      ) : (
-        <span />
-      )}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap gap-2">
+        {variant === "embedded" && onEmbeddedBack ? (
+          <button
+            type="button"
+            onClick={onEmbeddedBack}
+            className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-primary)]"
+          >
+            ← Back
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={downloadTxt}
@@ -808,26 +974,30 @@ export function LiveResumeEditorExperience({
         >
           Download resume (.txt)
         </button>
+        <button
+          type="button"
+          onClick={() => void downloadPdf()}
+          disabled={pdfDownloading}
+          className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm font-medium text-[var(--text-primary)] disabled:opacity-60"
+        >
+          {pdfDownloading ? "Generating PDF…" : "Download resume (.pdf)"}
+        </button>
         {variant === "page" ? (
           <Link
             href="/match"
-            onClick={() => persistEditorToStorage()}
-            className="inline-flex rounded-[10px] px-5 py-2.5 text-sm font-bold text-white"
+            className="inline-flex items-center gap-2 rounded-[10px] px-5 py-2.5 text-sm font-bold text-white"
             style={{ background: "var(--gradient-hero)" }}
           >
-            Continue to Match →
+            Next
           </Link>
         ) : onEmbeddedContinue ? (
           <button
             type="button"
-            onClick={() => {
-              persistEditorToStorage();
-              onEmbeddedContinue();
-            }}
-            className="rounded-[10px] px-5 py-2.5 text-sm font-bold text-white"
+            onClick={onEmbeddedContinue}
+            className="inline-flex items-center gap-2 rounded-[10px] px-5 py-2.5 text-sm font-bold text-white"
             style={{ background: "var(--gradient-hero)" }}
           >
-            Continue to Match →
+            Next
           </button>
         ) : null}
       </div>
@@ -840,7 +1010,16 @@ export function LiveResumeEditorExperience({
         variant === "page" ? "pb-36" : "pb-8"
       }`}
     >
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[55%_45%] lg:gap-6">
+      {toast ? (
+        <div
+          className="re-editor-toast fixed bottom-24 left-1/2 z-[130] -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)] shadow-lg"
+          role="status"
+        >
+          {toast}
+        </div>
+      ) : null}
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,400px)] lg:gap-6">
         <div className="flex min-h-0 flex-col">
           <div className="mb-4">
             <h1
@@ -849,59 +1028,280 @@ export function LiveResumeEditorExperience({
             >
               Resume Editor
             </h1>
+            {tailoredForLabel ? (
+              <p
+                className="mt-2 inline-block rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--text-primary)]"
+                title="Also inserted at the top of your resume export"
+              >
+                Tailored for {tailoredForLabel}
+              </p>
+            ) : null}
             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-              Preview changes on hover, apply rewrites, then recalculate when
-              you&apos;re ready.
+              Full resume in one scroll. Optimize runs{" "}
+              <span className="font-semibold">gpt-4o</span> per bullet, then a
+              structure pass. Changed lines show inline with yellow highlight
+              and Keep / Undo.
             </p>
           </div>
 
-          <div className="mb-2">
-            <span className="text-xs text-[var(--text-muted)]">
-              Missing keywords:
-            </span>
-            <div className="flex max-w-full flex-wrap gap-2 py-3">
-              {missingKw.map((k) => (
-                <div key={k} className="relative">
-                  <button
-                    type="button"
-                    onClick={(e) => void openKeywordTooltip(k, e.currentTarget)}
-                    className="shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium transition hover:opacity-90"
-                    style={{
-                      background: "rgba(239,68,68,0.08)",
-                      borderColor: "rgba(239,68,68,0.3)",
-                      color: "#dc2626",
-                    }}
-                  >
-                    {k}
-                  </button>
-                </div>
-              ))}
-              {missingKw.length === 0 ? (
-                <span className="text-xs text-[var(--text-muted)]">
-                  {hasRecalculatedOnce
-                    ? "Great — no missing keywords listed."
-                    : "Recalculate to refresh keyword gaps."}
-                </span>
-              ) : null}
-            </div>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <button
+              type="button"
+              disabled={initLoading || optimizePhase === "running"}
+              onClick={onPrimaryButtonClick}
+              className="inline-flex min-h-[44px] items-center justify-center rounded-xl px-5 py-2.5 text-sm font-bold text-white shadow-[0_4px_20px_var(--brand-glow)] transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-70"
+              style={{
+                background:
+                  primaryShowsOptimized
+                    ? "linear-gradient(135deg, #7c3aed, #6d28d9)"
+                    : "linear-gradient(135deg, var(--brand), var(--brand-2))",
+              }}
+            >
+              {optimizePhase === "running"
+                ? "Optimizing…"
+                : primaryShowsOptimized
+                  ? "✓ Optimized — Recalculate Score"
+                  : "✨ Optimize Resume"}
+            </button>
+            {optimizeProgress ? (
+              <span className="text-xs text-[var(--text-muted)]">
+                {optimizeProgress}
+              </span>
+            ) : null}
+            {showUndoAll ? (
+              <button
+                type="button"
+                onClick={undoAllOptimize}
+                className="text-left text-sm font-semibold text-[var(--brand)] underline-offset-2 hover:underline"
+              >
+                Undo all changes
+              </button>
+            ) : null}
           </div>
 
-          {loadingResume ? (
-            <p className="text-sm text-[var(--text-secondary)]">Loading…</p>
-          ) : null}
-          {loadError ? (
-            <p className="mb-2 text-sm text-amber-600">{loadError}</p>
+          {changeSummary && primaryShowsOptimized ? (
+            <div className="mb-4 overflow-hidden rounded-xl border border-violet-200/70 bg-[var(--bg-card)] shadow-sm">
+              <button
+                type="button"
+                onClick={() => setChangeSummaryOpen((o) => !o)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-violet-50/50"
+                aria-expanded={changeSummaryOpen}
+              >
+                <span className="text-sm font-bold text-[var(--text-primary)]">
+                  ✨ What changed
+                </span>
+                <span className="shrink-0 text-xs font-semibold text-violet-700">
+                  {changeSummaryOpen ? (
+                    <>Hide <span aria-hidden>▼</span></>
+                  ) : (
+                    <>Show <span aria-hidden>▶</span></>
+                  )}
+                </span>
+              </button>
+              {changeSummaryOpen ? (
+                <div className="border-t border-violet-200/50 px-4 py-3 text-sm leading-relaxed text-[var(--text-secondary)]">
+                  <ul className="list-disc space-y-2 pl-5">
+                    <li>
+                      <span className="text-[var(--text-primary)]">
+                        {optimizeBulletsRewrittenCount !== null
+                          ? optimizeBulletsRewrittenCount
+                          : changeSummary.bulletsRewritten}
+                      </span>{" "}
+                      bullet
+                      {(optimizeBulletsRewrittenCount !== null
+                        ? optimizeBulletsRewrittenCount
+                        : changeSummary.bulletsRewritten) !== 1
+                        ? "s"
+                        : ""}{" "}
+                      rewritten
+                      — job-aligned language, soft skills surfaced, quantification added, verb duplicates resolved
+                    </li>
+                    {changeSummary.keywordsAdded.length > 0 ? (
+                      <li>
+                        <span className="text-[var(--text-primary)]">
+                          {changeSummary.keywordsAdded.length}
+                        </span>{" "}
+                        keyword
+                        {changeSummary.keywordsAdded.length !== 1 ? "s" : ""}{" "}
+                        added:{" "}
+                        <span className="font-medium text-violet-800">
+                          {formatKeywordListForSummary(changeSummary.keywordsAdded)}
+                        </span>
+                      </li>
+                    ) : null}
+                    {changeSummary.sectionsAdded.length > 0 ? (
+                      <li>
+                        <span className="text-[var(--text-primary)]">
+                          {changeSummary.sectionsAdded.length}
+                        </span>{" "}
+                        section
+                        {changeSummary.sectionsAdded.length !== 1 ? "s" : ""}{" "}
+                        added:{" "}
+                        <span className="font-medium text-[var(--text-primary)]">
+                          {changeSummary.sectionsAdded.join(", ")}
+                        </span>
+                      </li>
+                    ) : null}
+                    {changeSummary.biggestGap ? (
+                      <li className="border-t border-violet-200/40 pt-2">
+                        <span className="font-semibold text-amber-700">
+                          Biggest remaining gap:
+                        </span>{" "}
+                        <span className="text-[var(--text-primary)]">
+                          {changeSummary.biggestGap}
+                        </span>
+                        {" — consider addressing this in an interview or cover letter."}
+                      </li>
+                    ) : null}
+                    {changeSummary.scoreAfter !== null ? (
+                      <li>
+                        {changeSummary.scoreAfter > changeSummary.scoreBefore
+                          ? "Score improved: "
+                          : "ATS score: "}
+                        <span className="font-semibold tabular-nums text-[var(--text-primary)]">
+                          {changeSummary.scoreBefore}
+                        </span>
+                        {" → "}
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            changeSummary.scoreAfter > changeSummary.scoreBefore
+                              ? "text-violet-700"
+                              : "text-[var(--text-primary)]"
+                          }`}
+                        >
+                          {changeSummary.scoreAfter}
+                        </span>
+                      </li>
+                    ) : (
+                      <li className="text-[var(--text-muted)]">
+                        ATS score updated in the sidebar — tap Recalculate if
+                        you want a fresh quality pass.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
-          <div
-            ref={editorRef}
-            id="resume-editor"
-            contentEditable={!loadingResume}
-            suppressContentEditableWarning
-            onInput={onEditorInput}
-            className="min-h-[70vh] whitespace-pre-wrap break-words rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-9 py-8 text-[14px] leading-[1.8] text-[var(--text-primary)] outline-none transition-[box-shadow,border-color] focus:border-[var(--brand)] focus:shadow-[0_0_0_3px_var(--brand-glow)]"
-            style={{ fontFamily: "Georgia, serif" }}
-          />
+          {initLoading ? (
+            <p className="text-sm text-[var(--text-muted)]">Loading resume…</p>
+          ) : null}
+          {initError ? (
+            <p className="mb-2 text-sm text-amber-600">{initError}</p>
+          ) : null}
+
+          <label className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+            Resume
+          </label>
+          <div className="re-resume-page-shell rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 sm:p-5">
+            {blocks.length === 0 && !initLoading ? (
+              <p className="text-sm text-[var(--text-muted)]">No resume text.</p>
+            ) : (
+              <div
+                className="re-resume-inline-doc mx-auto max-w-[210mm] space-y-0 font-serif"
+                style={{ fontFamily: "Georgia, serif" }}
+              >
+                {blocks.map((b) => {
+                  if (b.kind === "plain") {
+                    // Strip leading blank lines that the parser bundles with
+                    // the first real content line (e.g. the blank line
+                    // between EDUCATION and the university name).  Trailing
+                    // blank lines are also dropped so the textarea height
+                    // stays tight.
+                    const joined = b.lines.join("\n").replace(/^(\s*\n)+/, "").trimEnd();
+                    if (joined.trim() === "") return null;
+                    const pendingBefore = blockPending[b.id];
+                    const showChrome =
+                      pendingBefore !== undefined &&
+                      bulletTextChanged(pendingBefore, joined);
+                    return (
+                      <div
+                        key={b.id}
+                        className={`re-line-row rounded-r-lg ${
+                          showChrome ? "re-line-ai-pending" : ""
+                        }`}
+                      >
+                        <AutoResizeTextarea
+                          value={joined}
+                          onChange={(e) =>
+                            updatePlainBlock(b.id, e.target.value)
+                          }
+                          disabled={initLoading || optimizePhase === "running"}
+                          spellCheck
+                          className="w-full resize-none border-0 bg-transparent py-0.5 text-[13px] leading-[1.65] text-[var(--text-primary)] outline-none ring-0 focus:ring-0 disabled:opacity-60"
+                          aria-label="Resume section"
+                        />
+                        {showChrome ? (
+                          <div className="re-line-actions flex justify-end gap-2 pb-1 pr-1">
+                            <button
+                              type="button"
+                              onClick={() => keepBlock(b.id)}
+                              className="rounded-md bg-violet-600/90 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-violet-600"
+                            >
+                              ✓ Keep
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => undoBlock(b.id)}
+                              className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]"
+                            >
+                              ↩ Undo
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }
+                  const bullet = b;
+                  const joined = bulletJoined(bullet);
+                  const aiTarget = shouldSendBulletToAi(bullet);
+                  const pendingBefore = blockPending[bullet.id];
+                  const showChrome =
+                    aiTarget &&
+                    pendingBefore !== undefined &&
+                    bulletTextChanged(pendingBefore, joined);
+                  return (
+                    <div
+                      key={bullet.id}
+                      className={`re-line-row rounded-r-lg ${
+                        showChrome ? "re-line-ai-pending" : ""
+                      }`}
+                    >
+                      <AutoResizeTextarea
+                        value={joined}
+                        onChange={(e) =>
+                          updateBulletBlock(bullet.id, e.target.value)
+                        }
+                        disabled={initLoading || optimizePhase === "running"}
+                        spellCheck
+                        className="w-full resize-none border-0 bg-transparent py-0.5 text-[13px] leading-[1.65] text-[var(--text-primary)] outline-none ring-0 focus:ring-0 disabled:opacity-60"
+                        aria-label="Resume bullet"
+                      />
+                      {showChrome ? (
+                        <div className="re-line-actions flex justify-end gap-2 pb-1 pr-1">
+                          <button
+                            type="button"
+                            onClick={() => keepBlock(bullet.id)}
+                            className="rounded-md bg-violet-600/90 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-violet-600"
+                          >
+                            ✓ Keep
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => undoBlock(bullet.id)}
+                            className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]"
+                          >
+                            ↩ Undo
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="lg:sticky lg:top-6 lg:self-start">
@@ -914,433 +1314,215 @@ export function LiveResumeEditorExperience({
                 type="button"
                 disabled={scoring}
                 onClick={() => void recalculateScore()}
-                className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-[var(--brand)] disabled:opacity-70"
+                className="text-[13px] font-semibold text-[var(--brand)] disabled:opacity-60"
               >
-                {scoring ? (
-                  <span
-                    className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--brand)] border-t-transparent"
-                    aria-hidden
-                  />
-                ) : null}
-                {scoring ? "Scoring…" : "↻ Recalculate score"}
+                {scoring ? "Scoring…" : "↻ Recalculate"}
               </button>
             </div>
-
-            {!scoring ? (
-              <p
-                className="mb-1 text-[12px] font-bold uppercase tracking-wide"
-                style={{ color: status.color }}
-              >
-                {status.text}
-              </p>
-            ) : null}
-
-            {scoring ? (
-              <div className="flex items-center gap-1 py-3">
-                <span className="re-score-dot" />
-                <span className="re-score-dot" />
-                <span className="re-score-dot" />
-              </div>
-            ) : (
-              <div
-                className={`flex items-baseline gap-1 ${scoreGlowPulse ? "re-editor-score-glow-pulse rounded-lg" : ""}`}
-              >
-                <span
-                  className="text-[64px] font-extrabold leading-none"
-                  style={{
-                    fontFamily: "var(--font-plus-jakarta), system-ui, sans-serif",
-                    color: scoreHue(displayScore),
-                  }}
-                >
-                  {displayScore}
-                </span>
-                <span className="text-2xl text-[var(--text-muted)]">/100</span>
-              </div>
-            )}
-
-            {!hasRecalculatedOnce && !scoring ? (
-              <p className="mt-2 text-[12px] italic text-[var(--text-muted)]">
-                From your last analysis · Recalculate to update
-              </p>
-            ) : null}
-
-            {!scoring ? (
-              <p className="mt-2 text-[13px] italic text-[var(--text-secondary)]">
-                {motivation}
-              </p>
-            ) : null}
-
-            {scoringNote ? (
-              <p className="mt-2 text-[12px] font-medium text-[var(--brand)]">
-                {scoringNote}
-              </p>
-            ) : null}
-
-            <div
-              className={`mt-4 h-2 w-full overflow-hidden rounded-full bg-[var(--bg-surface)] ${scoring ? "re-progress-track-shimmer" : ""}`}
-            >
-              <div
-                className={`h-full rounded-full transition-[width] duration-[800ms] ease-out ${
-                  scoring ? "resume-editor-progress-pulse" : ""
-                }`}
+            <div className="flex items-baseline gap-1">
+              <span
+                className="text-[48px] font-extrabold leading-none"
                 style={{
-                  width: `${displayScore}%`,
-                  background:
-                    "linear-gradient(90deg, #ef4444 0%, #f59e0b 50%, #10b981 100%)",
-                  borderRadius: 999,
+                  fontFamily: "var(--font-plus-jakarta), system-ui, sans-serif",
+                  color: scoreHue(displayScore),
                 }}
-              />
+              >
+                {displayScore}
+              </span>
+              <span className="text-xl text-[var(--text-muted)]">/100</span>
             </div>
-
-            {reasoning && !scoring ? (
-              <p className="mt-3 text-xs italic text-[var(--text-muted)]">
-                {reasoning}
+            <p
+              className="mt-1 text-[11px] font-bold uppercase tracking-wide"
+              style={{ color: status.color }}
+            >
+              {status.text}
+            </p>
+            {!hasRecalculatedOnce ? (
+              <p className="mt-2 text-[11px] text-[var(--text-muted)]">
+                Keywords from saved analysis · Recalculate refreshes bullet
+                quality (0–25)
               </p>
             ) : null}
-
-            {deltaLabel ? (
-              <p
-                className={`mt-2 text-[13px] ${
-                  deltaLabel.startsWith("+")
-                    ? "text-emerald-600"
-                    : "text-red-600"
-                }`}
-              >
-                {deltaLabel.startsWith("+") ? "↑ " : "↓ "}
-                {deltaLabel}
-              </p>
-            ) : null}
-
-            {celebrationBanner ? (
-              <div
-                className="mt-3 rounded-xl border px-4 py-3 text-sm font-semibold text-[#10b981]"
-                style={{
-                  background: "rgba(16,185,129,0.08)",
-                  borderColor: "rgba(16,185,129,0.2)",
-                }}
-              >
-                {celebrationBanner}
-              </div>
-            ) : null}
-
-            {steadyBanner ? (
-              <div
-                className="mt-3 rounded-xl border border-amber-200/80 bg-amber-50/60 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100"
-              >
-                {steadyBanner}
-              </div>
-            ) : null}
-
             {scoreError ? (
-              <div
-                className="mt-3 rounded-lg border border-[rgba(239,68,68,0.2)] px-3 py-2 text-xs"
-                style={{
-                  background: "rgba(239,68,68,0.08)",
-                  color: "var(--red)",
-                }}
-              >
-                {scoreError}{" "}
-                <button
-                  type="button"
-                  className="font-semibold underline"
-                  onClick={() => void recalculateScore()}
-                >
-                  Retry
-                </button>
-              </div>
+              <p className="mt-2 text-xs text-red-600">{scoreError}</p>
             ) : null}
+
+            <div className="mt-4">
+              <div className="mb-1.5 flex select-none justify-between gap-0.5 text-[8px] font-bold uppercase leading-tight tracking-tight text-[var(--text-muted)] sm:text-[9px]">
+                <span className="w-[55%] text-center">55 · Getting there</span>
+                <span className="w-[10%] text-center">65 · Good</span>
+                <span className="w-[10%] text-center">75 · Strong</span>
+                <span className="w-[10%] text-right">85+</span>
+              </div>
+              <div
+                className={`relative h-2.5 w-full overflow-visible rounded-full bg-[var(--bg-surface)] ${scoring ? "re-progress-track-shimmer" : ""}`}
+              >
+                {milestoneBarLabels().map(({ pct }) => (
+                  <div
+                    key={pct}
+                    className="absolute top-0 z-[1] h-full w-px -translate-x-1/2 bg-[var(--border)]"
+                    style={{ left: `${pct}%` }}
+                    aria-hidden
+                  />
+                ))}
+                <div
+                  className={`relative z-[2] h-full overflow-hidden rounded-full ${scoring ? "resume-editor-progress-pulse" : ""}`}
+                >
+                  <div
+                    className="h-full rounded-full transition-[width] duration-[800ms] ease-out"
+                    style={{
+                      width: `${displayScore}%`,
+                      background:
+                        "linear-gradient(90deg, #fecdd3 0%, #fde68a 26%, #ddd6fe 52%, #bbf7d0 100%)",
+                      borderRadius: 999,
+                    }}
+                  />
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] leading-snug text-[var(--text-secondary)]">
+                Next milestone:{" "}
+                <span className="font-semibold text-[var(--text-primary)]">
+                  {nextMilestone(displayScore).label}
+                </span>{" "}
+                ({nextMilestone(displayScore).min}+) —{" "}
+                {nextMilestone(displayScore).unlock}.
+              </p>
+            </div>
           </div>
 
           <div className={CARD}>
-            <h3 className="mb-3 text-[13px] font-bold text-[var(--text-primary)]">
+            <h3 className="mb-2 text-[13px] font-bold text-[var(--text-primary)]">
               Keyword coverage
             </h3>
-            {!hasRecalculatedOnce ? (
-              <p className="text-[13px] italic text-[var(--text-muted)]">
-                Click Recalculate to see your keyword coverage
-              </p>
-            ) : (
+            {baselineAnalysis?.keywords?.length ? (
               <>
-                <p className="text-[13px] text-emerald-600">
-                  Present: {presentKw.length} keywords
+                <p className="text-[13px] font-medium leading-relaxed text-[var(--text-primary)]">
+                  <span className="text-[var(--text-muted)]">Before optimization:</span>{" "}
+                  <span className="tabular-nums text-[var(--text-secondary)]">
+                    {keywordStartCount ?? presentKw.length} keywords
+                  </span>{" "}
+                  <span className="text-[var(--text-muted)]" aria-hidden>
+                    ➜
+                  </span>{" "}
+                  <span className="text-violet-600">Now:</span>{" "}
+                  <span className="font-bold tabular-nums text-violet-700">
+                    {presentKw.length} matched
+                  </span>
                 </p>
-                <p className="mt-1 text-[13px] text-red-600">
-                  Missing: {missingKw.length} keywords
+                <p className="mt-1 text-[12px] text-red-600">
+                  Still missing: {missingKw.length} (exact + job-tuned evidence
+                  terms)
                 </p>
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {presentKw.slice(0, 12).map((k) => (
+                  {presentKw.slice(0, 14).map((k) => (
                     <span
                       key={`p-${k}`}
                       className="rounded-full border px-2 py-0.5 text-[11px] font-medium"
                       style={{
                         background: "rgba(16,185,129,0.08)",
-                        borderColor: "rgba(16,185,129,0.3)",
-                        color: "#16a34a",
+                        borderColor: "rgba(16,185,129,0.35)",
+                        color: "#047857",
                       }}
                     >
                       {k}
                     </span>
                   ))}
-                  {presentKw.length > 12 ? (
+                  {presentKw.length > 14 ? (
                     <span className="text-[11px] text-[var(--text-muted)]">
-                      +{presentKw.length - 12} more
+                      +{presentKw.length - 14} more
                     </span>
                   ) : null}
                 </div>
+                {missingKw.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {missingKw.slice(0, 10).map((k) => (
+                      <span
+                        key={`m-${k}`}
+                        className="rounded-full border px-2 py-0.5 text-[11px] font-medium"
+                        style={{
+                          background: "rgba(239,68,68,0.06)",
+                          borderColor: "rgba(239,68,68,0.25)",
+                          color: "#dc2626",
+                        }}
+                      >
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </>
+            ) : (
+              <p className="text-[13px] italic text-[var(--text-muted)]">
+                Run analyze with a job to track keyword coverage.
+              </p>
             )}
           </div>
 
-          <div className={CARD}>
-            <h3 className="mb-3 text-[13px] font-bold text-[var(--text-primary)]">
-              Resume rewrites
-            </h3>
-            {rewrites.length === 0 ? (
-              <p className="text-sm text-[var(--text-muted)]">
-                No rewrites in your analysis.
-              </p>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  disabled={applyAllState !== "idle"}
-                  onClick={() => void handleApplyAll()}
-                  className={`mb-2 flex h-12 w-full items-center justify-center rounded-xl text-[15px] font-bold text-white shadow-[0_4px_20px_var(--brand-glow)] transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-90 ${
-                    applyAllState === "loading"
-                      ? "re-editor-apply-all-btn--loading"
-                      : ""
-                  }`}
-                  style={
-                    applyAllState === "done"
-                      ? {
-                          background: "rgba(16,185,129,0.15)",
-                          border: "1px solid rgba(16,185,129,0.3)",
-                          color: "#10b981",
-                          boxShadow: "none",
-                        }
-                      : {
-                          background:
-                            "linear-gradient(135deg, var(--brand), var(--brand-2))",
-                        }
-                  }
-                >
-                  {applyAllState === "loading"
-                    ? "✨ Applying improvements..."
-                    : applyAllState === "done"
-                      ? "✓ All improvements applied"
-                      : "✨ Apply all improvements"}
-                </button>
-                <p className="mb-4 text-center text-xs text-[var(--text-muted)]">
-                  Applies all rewrites to your resume at once
-                </p>
-
-                <div className="space-y-6">
-                  {groupedRewrites.map(([sectionLabel, items]) => (
-                    <div key={sectionLabel}>
-                      <div className="mb-2 border-b border-[var(--border)] pb-1 text-[10px] font-bold uppercase tracking-wide text-[var(--text-muted)]">
-                        {sectionLabel}
-                      </div>
-                      <ul className="space-y-3">
-                        {items.map((item) => {
-                          const i = item.globalIdx;
-                          const applied = appliedCards.has(i);
-                          return (
-                            <li
-                              key={i}
-                              className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-surface)] p-3 transition-colors sm:p-4"
-                              onMouseEnter={() =>
-                                onRewriteCardEnter(item.originalText)
-                              }
-                              onMouseLeave={onRewriteCardLeave}
-                            >
-                              <div className="flex gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <p className="mb-1.5 text-[12px] italic leading-snug text-[var(--text-muted)] line-through">
-                                    {item.originalText}
-                                  </p>
-                                  <p className="text-[13px] font-medium leading-[1.6] text-[var(--text-primary)]">
-                                    {item.rewrittenText}
-                                  </p>
-                                  <p className="mt-1 text-[11px] italic text-[var(--text-muted)]">
-                                    {item.explanation}
-                                  </p>
-                                </div>
-                                <div className="flex shrink-0 flex-col items-end gap-2">
-                                  <button
-                                    type="button"
-                                    disabled={applied}
-                                    onClick={() =>
-                                      onRewriteApply(
-                                        i,
-                                        item.originalText,
-                                        item.rewrittenText,
-                                      )
-                                    }
-                                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-sm transition disabled:cursor-default disabled:opacity-100 ${
-                                      applied
-                                        ? ""
-                                        : "hover:border-[#10b981] hover:bg-[rgba(16,185,129,0.08)] hover:text-[#10b981]"
-                                    }`}
-                                    style={
-                                      applied
-                                        ? {
-                                            borderColor:
-                                              "rgba(16,185,129,0.5)",
-                                            background:
-                                              "rgba(16,185,129,0.2)",
-                                            color: "#10b981",
-                                          }
-                                        : {
-                                            borderColor: "var(--border)",
-                                            background: "var(--bg-card)",
-                                          }
-                                    }
-                                    title="Apply rewrite"
-                                  >
-                                    {applied ? (
-                                      <svg
-                                        key={`chk-${i}-${checkAnimKey}`}
-                                        className="h-3.5 w-3.5 resume-editor-check-draw text-[#10b981]"
-                                        viewBox="0 0 12 12"
-                                        fill="none"
-                                        aria-hidden
-                                      >
-                                        <path
-                                          d="M2 6l3 3 5-5"
-                                          stroke="currentColor"
-                                          strokeWidth="2"
-                                          strokeLinecap="round"
-                                          strokeLinejoin="round"
-                                        />
-                                      </svg>
-                                    ) : (
-                                      "✓"
-                                    )}
-                                  </button>
-                                  {applied ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => onRewriteUndo(i)}
-                                      className="text-[13px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                                    >
-                                      ↩ Undo
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {baselineAnalysis ? (
-              <div className="mt-8 border-t border-[var(--border)] pt-6">
-                <h4 className="mb-4 text-[13px] font-bold text-[var(--text-primary)]">
-                  Your resume strength
-                </h4>
-                <div className="space-y-3">
-                  {(
-                    [
-                      ["Keyword match", strengthMeters.kw, 0],
-                      ["Experience clarity", strengthMeters.exp, 80],
-                      ["Overall readiness", strengthMeters.overall, 160],
-                    ] as const
-                  ).map(([label, pct, stagger]) => (
-                    <div
-                      key={label}
-                      className="flex items-center gap-3 text-[12px]"
-                    >
-                      <span className="w-[130px] shrink-0 text-[var(--text-secondary)]">
-                        {label}
-                      </span>
-                      <div className="relative h-[6px] min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--bg-surface)]">
-                        <div
-                          className="h-full rounded-full bg-[var(--brand)]"
-                          style={{
-                            width: strengthAnimate ? `${pct}%` : "0%",
-                            transition: "width 1s ease-out",
-                            transitionDelay: `${stagger}ms`,
-                          }}
-                        />
-                      </div>
-                      <span className="w-9 shrink-0 text-right font-semibold text-[var(--text-primary)]">
-                        {pct}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                {displayScore >= 60 ? (
-                  <Link
-                    href="/match"
-                    onClick={() => persistEditorToStorage()}
-                    className="mt-4 inline-block text-[13px] font-semibold text-[var(--brand)]"
-                  >
-                    Ready to move on? →
-                  </Link>
+          {/* Application assessment panel */}
+          {(competitiveAssessment || competitiveLoading) ? (
+            <div className={CARD}>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-[13px] font-bold text-[var(--text-primary)]">
+                  Application Assessment
+                </h3>
+                {competitiveLoading ? (
+                  <span className="text-[11px] text-[var(--text-muted)]">
+                    Analyzing…
+                  </span>
                 ) : null}
               </div>
-            ) : null}
-          </div>
+              {competitiveAssessment && !competitiveLoading ? (
+                <>
+                  <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
+                    {competitiveAssessment.assessment ||
+                      (() => {
+                        const m = competitiveAssessment.matchOn.slice(0, 2).join(" and ");
+                        const g = competitiveAssessment.gaps.slice(0, 2).join(" and ");
+                        return `Your application is competitive on ${m || "several key areas"}.${g ? ` To strengthen your chances further, consider addressing ${g} in your cover letter or interview.` : ""}`;
+                      })()}
+                  </p>
+                  {competitiveAssessment.matchOn.length > 0 ? (
+                    <div className="mt-3">
+                      <p className="text-[11px] font-semibold text-violet-700">
+                        Strengths:
+                      </p>
+                      <ul className="mt-0.5 space-y-0.5 pl-3">
+                        {competitiveAssessment.matchOn.map((m) => (
+                          <li
+                            key={m}
+                            className="text-[11px] text-[var(--text-secondary)] before:mr-1 before:content-['•'] before:text-violet-500"
+                          >
+                            {m}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {competitiveAssessment.gaps.length > 0 ? (
+                    <div className="mt-2">
+                      <p className="text-[11px] font-semibold text-amber-700">
+                        Areas to address:
+                      </p>
+                      <ul className="mt-0.5 space-y-0.5 pl-3">
+                        {competitiveAssessment.gaps.map((g) => (
+                          <li
+                            key={g}
+                            className="text-[11px] text-[var(--text-secondary)] before:mr-1 before:content-['•'] before:text-amber-500"
+                          >
+                            {g}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
       {bottomBar}
-
-      {kwTooltip ? (
-        <div
-          ref={kwTooltipRef}
-          className="fixed z-[100] w-[280px] rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 shadow-[0_4px_20px_rgba(0,0,0,0.12)]"
-          style={{
-            left: kwTooltip.left,
-            top: kwTooltip.top,
-          }}
-        >
-          <p className="text-sm font-bold text-[var(--text-primary)]">
-            {kwTooltip.keyword}
-          </p>
-          <div className="my-2 border-t border-[var(--border)]" />
-          <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-[var(--text-muted)]">
-            Where to add it:
-          </p>
-          {kwSuggestionsLoading ? (
-            <div className="flex gap-1 py-2">
-              <span className="re-score-dot" />
-              <span className="re-score-dot" />
-              <span className="re-score-dot" />
-            </div>
-          ) : kwSuggestions.length === 0 ? (
-            <p className="text-xs text-[var(--text-muted)]">
-              Couldn&apos;t load suggestions. Try again later.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {kwSuggestions.map((s, idx) => (
-                <li
-                  key={idx}
-                  className="border-l-2 border-[var(--brand)] py-1 pl-2.5 pr-1 text-[13px] text-[var(--text-secondary)]"
-                >
-                  {s}
-                  <button
-                    type="button"
-                    onClick={() => addSuggestionToResume(s)}
-                    className="mt-1 block text-xs font-semibold text-[var(--brand)]"
-                  >
-                    Add to resume
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-2 text-[10px] text-[var(--text-muted)]">
-            Role context: {jobTitleLine}
-          </p>
-        </div>
-      ) : null}
     </div>
   );
 }

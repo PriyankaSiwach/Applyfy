@@ -6,17 +6,19 @@
   --bg-card: #ffffff;
   --bg-card-hover: #f5f8ff;
   --border: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(59, 91, 219, 0.3);
+  --border-hover: rgba(124, 58, 237, 0.35);
   --text-primary: #0d1117;
   --text-secondary: #4b5675;
   --text-muted: #9aa3b8;
-  --brand: #3b5bdb;
-  --brand-2: #7c3aed;
-  --brand-glow: rgba(59, 91, 219, 0.15);
-  --green: #10b981;
+  --brand: #7c3aed;
+  --brand-2: #6d28d9;
+  --brand-tint: #ede9fe;
+  --brand-glow: rgba(124, 58, 237, 0.2);
+  --success: #7c3aed;
+  --green: var(--brand);
   --amber: #f59e0b;
   --red: #ef4444;
-  --gradient-hero: linear-gradient(135deg, #3b5bdb 0%, #7c3aed 100%);
+  --gradient-hero: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
 
   /* Legacy aliases (app routes) */
   --foreground: var(--text-primary);
@@ -26,19 +28,21 @@
   --primary-hover: var(--brand-2);
 }
 
+/* Used only on `/` and `/dashboard` (see ThemeProvider). Slightly warmer + higher contrast. */
 html.dark {
-  --bg-base: #0c0e1a;
-  --bg-surface: #11131f;
-  --bg-card: #161827;
-  --bg-card-hover: #1c1f33;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-hover: rgba(124, 58, 237, 0.4);
-  --text-primary: #eef0f8;
-  --text-secondary: #8892b0;
-  --text-muted: #4b5675;
-  --brand: #6b8cff;
-  --brand-2: #a78bfa;
-  --brand-glow: rgba(107, 140, 255, 0.15);
+  --bg-base: #0a0b12;
+  --bg-surface: #12131f;
+  --bg-card: #16182a;
+  --bg-card-hover: #1e2136;
+  --border: rgba(199, 210, 254, 0.12);
+  --border-hover: rgba(196, 181, 253, 0.5);
+  --text-primary: #f4f6ff;
+  --text-secondary: #b4bdd9;
+  --text-muted: #7c869f;
+  --brand: #c4b5fd;
+  --brand-2: #ddd6fe;
+  --brand-tint: rgba(139, 92, 246, 0.28);
+  --brand-glow: rgba(167, 139, 250, 0.25);
   --foreground: var(--text-primary);
   --app-bg: var(--bg-base);
   --card: var(--bg-card);
@@ -49,10 +53,10 @@ html.dark {
 @theme inline {
   --color-background: var(--app-bg);
   --color-foreground: var(--foreground);
-  --color-primary: #3b5bdb;
-  --color-primary-hover: #7c3aed;
-  --color-match: #10b981;
-  --color-accent: #0ea5e9;
+  --color-primary: #7c3aed;
+  --color-primary-hover: #6d28d9;
+  --color-match: #7c3aed;
+  --color-accent: #7c3aed;
   --color-app-bg: var(--app-bg);
   --color-card: var(--card);
   --color-border-muted: var(--border);
@@ -87,6 +91,36 @@ h6 {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ── Auth page animations ──────────────────────────────────────────────────── */
+
+@keyframes auth-orb-drift-1 {
+  0%,100% { transform: translate(0, 0) scale(1); }
+  30%      { transform: translate(40px, -56px) scale(1.12); }
+  65%      { transform: translate(-28px, 32px) scale(0.92); }
+}
+@keyframes auth-orb-drift-2 {
+  0%,100% { transform: translate(0, 0) scale(1); }
+  35%      { transform: translate(-48px, 36px) scale(0.88); }
+  70%      { transform: translate(32px, -24px) scale(1.1); }
+}
+@keyframes auth-orb-drift-3 {
+  0%,100% { transform: translate(0, 0) scale(1); }
+  40%      { transform: translate(20px, 44px) scale(1.08); }
+  75%      { transform: translate(-36px, -20px) scale(0.94); }
+}
+@keyframes auth-card-in {
+  from { opacity: 0; transform: translateY(28px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes auth-word-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes auth-panel-in {
+  from { opacity: 0; transform: translateX(-20px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 
 /* Landing / app shared */
@@ -156,6 +190,59 @@ h6 {
   }
 }
 
+@keyframes applyfy-step-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes applyfy-step-active-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.2);
+  }
+}
+
+@keyframes applyfy-quick-win-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes applyfy-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes applyfy-dropzone-pulse {
+  0%,
+  100% {
+    border-color: rgba(124, 58, 237, 0.45);
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.12);
+  }
+  50% {
+    border-color: rgba(124, 58, 237, 0.85);
+    box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.15);
+  }
+}
+
 @keyframes home-hero-float {
   0%,
   100% {
@@ -169,7 +256,7 @@ h6 {
 @keyframes home-badge-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.35);
   }
   50% {
     box-shadow: 0 0 0 6px transparent;
@@ -183,16 +270,6 @@ h6 {
   }
   50% {
     transform: translateY(8px);
-  }
-}
-
-@keyframes home-badge-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 6px transparent;
   }
 }
 
@@ -233,8 +310,89 @@ h6 {
   animation: step-ring 2s ease-out infinite;
 }
 
+.applyfy-step-enter {
+  animation: applyfy-step-slide-in 250ms ease forwards;
+}
+
+.applyfy-step-active-ring {
+  animation: applyfy-step-active-glow 2s ease-in-out infinite;
+}
+
+.applyfy-btn-primary:not(:disabled):hover,
+a.applyfy-btn-primary:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.25);
+}
+
+.applyfy-btn-primary:not(:disabled):active,
+a.applyfy-btn-primary:active {
+  transform: scale(0.98);
+}
+
+.applyfy-btn-run-analysis {
+  background-color: #7c3aed;
+  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.35);
+}
+
+.applyfy-btn-run-analysis:not(:disabled):hover {
+  background-image: linear-gradient(
+    90deg,
+    #6d28d9 0%,
+    #a78bfa 40%,
+    #ddd6fe 50%,
+    #a78bfa 60%,
+    #7c3aed 100%
+  );
+  background-size: 220% 100%;
+  animation: applyfy-shimmer 1.35s ease-in-out infinite;
+  transform: scale(1.02);
+  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
+}
+
+.applyfy-btn-run-analysis:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+.applyfy-resume-dropzone-drag {
+  animation: applyfy-dropzone-pulse 1.2s ease-in-out infinite;
+  border-color: rgba(124, 58, 237, 0.7) !important;
+  background: color-mix(in srgb, var(--brand-tint) 55%, white) !important;
+}
+
+.applyfy-quick-win-card {
+  opacity: 0;
+  animation: applyfy-quick-win-in 0.35s ease forwards;
+}
+
+/* ── Global card polish ────────────────────────────────────────────────────── */
+
+/* Slightly larger, more modern border-radius on rounded cards */
+.rounded-2xl { border-radius: 1.125rem !important; }
+.rounded-xl  { border-radius: 0.875rem !important; }
+
+/* Subtle elevation for section cards */
+.applyfy-card {
+  border-radius: 1.125rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05), 0 8px 24px -4px rgba(124, 58, 237, 0.07);
+  transition: box-shadow 0.2s ease;
+}
+.applyfy-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07), 0 12px 32px -6px rgba(124, 58, 237, 0.12);
+}
+
+/* Bolder section headings */
+h2, h3 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Consistent section spacing between major content blocks */
+.applyfy-section + .applyfy-section {
+  margin-top: 2rem;
+}
+
 .animate-section-in {
-  animation: fade-in-up 0.5s ease-out forwards;
+  animation: applyfy-step-slide-in 250ms ease forwards;
   opacity: 0;
 }
 
@@ -273,17 +431,33 @@ h6 {
 }
 
 .app-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  background: linear-gradient(165deg, #ffffff 0%, #faf9ff 55%, #ffffff 100%);
+  border: 1px solid color-mix(in srgb, #7c3aed 14%, #e2e8f0);
+  border-radius: 20px;
   box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.06),
-    0 1px 2px rgba(0, 0, 0, 0.04);
-  padding: 24px;
+    0 4px 6px -1px rgba(15, 23, 42, 0.05),
+    0 12px 32px -12px rgba(124, 58, 237, 0.12);
+  padding: 28px;
+  transition:
+    box-shadow 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.app-card:hover {
+  border-color: color-mix(in srgb, #7c3aed 22%, #e2e8f0);
+  box-shadow:
+    0 6px 10px -2px rgba(15, 23, 42, 0.06),
+    0 16px 40px -14px rgba(124, 58, 237, 0.14);
 }
 
 html.dark .app-card {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  background: var(--bg-card);
+  border-color: var(--border);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+html.dark .app-card:hover {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
 }
 
 .cover-letter-editor::first-line {
@@ -309,6 +483,100 @@ button:not(:disabled):active {
   background: rgba(245, 158, 11, 0.15);
   text-decoration: underline wavy #f59e0b;
   cursor: help;
+}
+
+.resume-editor-surface .resume-editor-line {
+  display: block;
+  min-height: 1.2em;
+}
+
+.resume-editor-surface .resume-editor-line + .resume-editor-line {
+  margin-top: 0.15em;
+}
+
+/* Inline AI-optimized resume lines */
+.re-line-ai-pending {
+  position: relative;
+  background: #fffbeb;
+  border-left: 3px solid #6366f1;
+  border-radius: 0 10px 10px 0;
+  padding: 6px 8px 6px 10px;
+  margin: 2px 0 2px -2px;
+  animation: re-ai-line-in 0.45s ease-out;
+  box-shadow: inset 0 -1px 0 0 rgba(99, 102, 241, 0.15);
+}
+
+.dark .re-line-ai-pending {
+  background: rgba(240, 253, 244, 0.12);
+  border-left-color: #818cf8;
+}
+
+/* Unified resume editor — single scroll, print-width page */
+.re-resume-page-shell {
+  box-shadow: 0 8px 40px rgba(15, 23, 42, 0.06);
+}
+
+.re-resume-unified-editor {
+  display: block;
+  width: 100%;
+  min-height: 72vh;
+  max-height: min(88vh, 920px);
+  overflow-y: auto;
+  resize: vertical;
+  padding: 2rem 2.25rem;
+  font-size: 13px;
+  line-height: 1.65;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  .re-resume-unified-editor {
+    max-width: 210mm;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+@keyframes re-ai-line-in {
+  from {
+    opacity: 0.55;
+    transform: translateX(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.re-line-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.re-line-row:hover .re-line-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.re-editor-toast {
+  animation: re-toast-in 0.35s ease-out;
+}
+
+@keyframes re-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .resume-editor-name {
@@ -548,6 +816,28 @@ html.dark .re-progress-track-shimmer::after {
 .re-flash-red {
   transition: background-color 0.4s ease;
   background-color: rgba(239, 68, 68, 0.12) !important;
+}
+
+@keyframes re-float-delta {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-32px);
+  }
+}
+
+.re-float-delta {
+  animation: re-float-delta 2.1s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .re-float-delta {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 @keyframes re-score-explain-in {

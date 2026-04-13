@@ -16,6 +16,10 @@ export type ParseCoverLetterResult =
       jobLink: string;
       tone: CoverTone;
       length: CoverLength;
+      /** Explicit job title provided by the caller (skips extraction). May be empty string. */
+      jobTitle: string;
+      /** Explicit company name provided by the caller. May be empty string. */
+      jobCompany: string;
     }
   | { ok: false; error: string; status: number };
 
@@ -62,5 +66,7 @@ export function parseCoverLetterBody(body: unknown): ParseCoverLetterResult {
     jobLink,
     tone,
     length,
+    jobTitle: typeof o.jobTitle === "string" ? o.jobTitle.trim() : "",
+    jobCompany: typeof o.jobCompany === "string" ? o.jobCompany.trim() : "",
   };
 }
