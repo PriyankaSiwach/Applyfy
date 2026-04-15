@@ -61,15 +61,17 @@ export function isLocalDevForAdminBypass(
 }
 
 /**
- * Returns true when an email matches ADMIN_EMAIL / NEXT_PUBLIC_ADMIN_EMAIL
- * and the app is running in a local-dev context (see `isLocalDevForAdminBypass`).
+ * True when the user's primary email matches `ADMIN_EMAIL` or
+ * `NEXT_PUBLIC_ADMIN_EMAIL` (case-insensitive). Used for unlimited scans and
+ * server-side feature bypasses on all hosts (not limited to local dev).
+ *
+ * `runtimeHost` is accepted for backward compatibility; it is ignored.
  */
 export function isAdminBypassEmail(
   email: string | null | undefined,
-  runtimeHost?: string | null,
+  _runtimeHost?: string | null,
 ): boolean {
   if (!email) return false;
-  if (!isLocalDevForAdminBypass(runtimeHost)) return false;
   const adminEmail: string =
     process.env.ADMIN_EMAIL?.trim() ||
     process.env.NEXT_PUBLIC_ADMIN_EMAIL?.trim() ||

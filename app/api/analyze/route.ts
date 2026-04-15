@@ -17,9 +17,11 @@ import {
   padRewritesToSix,
   sanitizeAnalyzeRewrites,
 } from "@/lib/sanitizeAnalyzeRewrites";
+import { effectiveTierFromClerkPublicMetadata } from "@/lib/effectiveSubscriptionTier";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 import {
   FREE_ANALYSIS_SCAN_LIMIT,
+  hasProPlan,
   isAdminBypassEmail,
   tierFromPublicMetadata,
 } from "@/lib/tier";
@@ -385,6 +387,8 @@ export async function POST(request: Request) {
   }
   const openaiKey = keyCheck.key;
 
+  /** Admin or paid (Clerk + Stripe) — skip free scan cap and post-run increment. */
+  let skipFreeScanAccounting = false;
   const { userId } = await auth();
   if (userId) {
     try {
@@ -397,15 +401,19 @@ export async function POST(request: Request) {
         request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ??
         request.headers.get("host") ??
         null;
-      if (!isAdminBypassEmail(primaryEmail, reqHost)) {
-        const tier = tierFromPublicMetadata(
-          user.publicMetadata as Record<string, unknown>,
-        );
-        if (tier === "free") {
-          const used = Number(
-            (user.publicMetadata as Record<string, unknown>).analysisScanCount ??
-              0,
-          );
+      const meta = user.publicMetadata as Record<string, unknown>;
+
+      // 1) Admin email → unlimited
+      if (isAdminBypassEmail(primaryEmail, reqHost)) {
+        skipFreeScanAccounting = true;
+      } else {
+        // 2) Active Pro/Premium (metadata or live Stripe) → unlimited
+        const effectiveTier = await effectiveTierFromClerkPublicMetadata(meta);
+        if (hasProPlan(effectiveTier)) {
+          skipFreeScanAccounting = true;
+        } else {
+          // 3) Free only — enforce 3-scan cap
+          const used = Number(meta.analysisScanCount ?? 0);
           const u = Number.isFinite(used) ? used : 0;
           if (u >= FREE_ANALYSIS_SCAN_LIMIT) {
             return jsonNoStore(
@@ -535,16 +543,30 @@ export async function POST(request: Request) {
       try {
         const c = await clerkClient();
         const user = await c.users.getUser(userId);
-        const tier = tierFromPublicMetadata(
-          user.publicMetadata as Record<string, unknown>,
-        );
-        if (tier === "free") {
-          const prev = Number(
-            (user.publicMetadata as Record<string, unknown>)
-              .analysisScanCount ?? 0,
-          );
-          const next = (Number.isFinite(prev) ? prev : 0) + 1;
-          await mergeClerkPublicMetadata(userId, { analysisScanCount: next });
+        const meta = user.publicMetadata as Record<string, unknown>;
+        const primaryEmail =
+          user.emailAddresses.find((e) => e.id === user.primaryEmailAddressId)
+            ?.emailAddress ?? null;
+        const reqHost =
+          request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ??
+          request.headers.get("host") ??
+          null;
+        if (!isAdminBypassEmail(primaryEmail, reqHost)) {
+          const effectiveTier = await effectiveTierFromClerkPublicMetadata(meta);
+          const metaTier = tierFromPublicMetadata(meta);
+          if (hasProPlan(effectiveTier) && !hasProPlan(metaTier)) {
+            await mergeClerkPublicMetadata(userId, {
+              subscriptionTier: effectiveTier,
+            });
+          }
+          if (
+            !skipFreeScanAccounting &&
+            !hasProPlan(effectiveTier)
+          ) {
+            const prev = Number(meta.analysisScanCount ?? 0);
+            const next = (Number.isFinite(prev) ? prev : 0) + 1;
+            await mergeClerkPublicMetadata(userId, { analysisScanCount: next });
+          }
         }
       } catch (e) {
         console.error("[/api/analyze] increment analysisScanCount", e);

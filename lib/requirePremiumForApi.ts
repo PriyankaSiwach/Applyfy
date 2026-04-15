@@ -1,11 +1,8 @@
 import { auth, clerkClient } from "@clerk/nextjs/server";
 
+import { effectiveTierFromClerkPublicMetadata } from "@/lib/effectiveSubscriptionTier";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
-import {
-  hasPremiumPlan,
-  isAdminBypassEmail,
-  tierFromPublicMetadata,
-} from "@/lib/tier";
+import { hasPremiumPlan, isAdminBypassEmail } from "@/lib/tier";
 import type { AppTier } from "@/lib/tier";
 
 export type PremiumApiGate =
@@ -40,7 +37,7 @@ export async function requirePremiumForApi(request: Request): Promise<PremiumApi
     if (isAdminBypassEmail(primaryEmail, reqHost)) {
       return { ok: true, tier: "premium" };
     }
-    const tier = tierFromPublicMetadata(
+    const tier = await effectiveTierFromClerkPublicMetadata(
       user.publicMetadata as Record<string, unknown>,
     );
     if (!hasPremiumPlan(tier)) {
