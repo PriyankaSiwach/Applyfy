@@ -38,11 +38,14 @@ export const metadata: Metadata = {
   },
   description:
     "Upload your resume and a job listing URL. Get a match score, gap analysis, tailored cover letter, and interview prep.",
-  icons: {
-    icon: [{ url: "/logo.png", type: "image/png" }],
-    apple: [{ url: "/logo.png", type: "image/png" }],
-    shortcut: "/logo.png",
-  },
+    icons: {
+      icon: [
+        { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+        { url: "/favicon-64x64.png", sizes: "64x64", type: "image/png" },
+      ],
+      apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+      shortcut: "/favicon-32x32.png",
+    },
 };
 
 export default function RootLayout({

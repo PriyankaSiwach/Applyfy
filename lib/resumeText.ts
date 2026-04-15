@@ -1,5 +1,5 @@
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+import { extractText } from "unpdf";
 
 /** Supports `data:application/pdf;base64,` and `data:application/pdf;charset=utf-8;base64,` */
 function parseDataUrl(
@@ -22,7 +22,7 @@ function parseDataUrl(
   }
 }
 
-/** Copy bytes so pdf.js does not detach the underlying ArrayBuffer (fixes empty text in some runtimes). */
+/** Copy bytes so the PDF engine does not detach the underlying ArrayBuffer. */
 function bufferToUint8Array(buf: Buffer): Uint8Array {
   return Uint8Array.from(buf);
 }
@@ -30,13 +30,8 @@ function bufferToUint8Array(buf: Buffer): Uint8Array {
 async function tryExtractPdfText(buf: Buffer): Promise<string> {
   const data = bufferToUint8Array(buf);
   try {
-    const parser = new PDFParse({ data });
-    try {
-      const textResult = await parser.getText();
-      return (textResult.text ?? "").trim();
-    } finally {
-      await parser.destroy();
-    }
+    const { text } = await extractText(data, { mergePages: true });
+    return (text ?? "").trim();
   } catch {
     return "";
   }

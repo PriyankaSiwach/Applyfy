@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.join(__dirname),
   },
-  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "mammoth", "canvas"],
+  serverExternalPackages: ["mammoth", "canvas"],
 };
 
 export default nextConfig;
