@@ -38,7 +38,10 @@ export const metadata: Metadata = {
   },
   description:
     "Upload your resume and a job listing URL. Get a match score, gap analysis, tailored cover letter, and interview prep.",
-    icons: {
+  verification: {
+    google: "LIKh4Dox_64JyokUJ-vgh2axmpZS_lEm-y9TNX0k3FM",
+  },
+  icons: {
       icon: [
         { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
         { url: "/favicon-64x64.png", sizes: "64x64", type: "image/png" },
