@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 import { getSiteUrl } from "@/lib/siteUrl";
 
-/** Public marketing and product entry pages (HTML). */
-const PATHS: string[] = [
+/** Public marketing and legal pages only. */
+const PUBLIC_PATHS = [
   "/",
   "/about",
   "/pricing",
@@ -12,19 +12,12 @@ const PATHS: string[] = [
   "/contact",
   "/privacy",
   "/terms",
-  "/roadmap",
-  "/analyze",
-  "/match",
-  "/cover",
-  "/interview",
-  "/sign-in",
-  "/sign-up",
-];
+] as const;
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const base = getSiteUrl();
   const lastModified = new Date();
-  return PATHS.map((path) => ({
+  return PUBLIC_PATHS.map((path) => ({
     url: path === "/" ? `${base}/` : `${base}${path}`,
     lastModified,
   }));
