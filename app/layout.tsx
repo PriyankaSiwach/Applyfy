@@ -3,6 +3,7 @@ import { Geist_Mono } from "next/font/google";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppProviders } from "@/components/AppProviders";
+import { getSiteUrl } from "@/lib/siteUrl";
 import "./globals.css";
 
 const inter = Inter({
@@ -24,14 +25,8 @@ const geistMono = Geist_Mono({
 /** Only `/` and `/dashboard` may use dark — matches ThemeProvider + ThemeDocumentSync. */
 const themeInitScript = `(function(){try{var k='applyfy-theme';var p=(typeof location!=='undefined'?location.pathname:'')||'';var allow=p==='/'||p==='/dashboard';if(localStorage.getItem(k)==='dark'&&allow)document.documentElement.classList.add('dark');}catch(e){}})();`;
 
-const metadataBaseUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ??
-  (process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000");
-
 export const metadata: Metadata = {
-  metadataBase: new URL(metadataBaseUrl),
+  metadataBase: new URL(getSiteUrl()),
   title: {
     default: "Applyfy — AI-powered job application suite",
     template: "%s · Applyfy",
