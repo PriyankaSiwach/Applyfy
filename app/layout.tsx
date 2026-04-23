@@ -41,6 +41,10 @@ export const metadata: Metadata = {
   verification: {
     google: "LIKh4Dox_64JyokUJ-vgh2axmpZS_lEm-y9TNX0k3FM",
   },
+  robots: {
+    index: true,
+    follow: true,
+  },
   icons: {
       icon: [
         { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
