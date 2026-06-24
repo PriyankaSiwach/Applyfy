@@ -69,9 +69,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ url: session.url });
   } catch (e) {
     console.error("[stripe/checkout]", e);
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Checkout failed" },
-      { status: 500 },
-    );
+    const raw = e instanceof Error ? e.message : "Checkout failed";
+    const isExpiredStripeKey =
+      /expired api key/i.test(raw) && /sk_live_/i.test(raw);
+    const isClerkKeyIssue =
+      /clerk/i.test(raw) &&
+      (/secret/i.test(raw) || /unauthorized/i.test(raw) || /invalid/i.test(raw));
+    let error = raw;
+    if (isExpiredStripeKey) {
+      error =
+        "Stripe secret key is expired or revoked. In Vercel, set STRIPE_SECRET_KEY to your current key from Stripe Dashboard → Developers → API keys, then redeploy.";
+    } else if (isClerkKeyIssue) {
+      error =
+        "Clerk secret key is invalid or expired. In Vercel, set CLERK_SECRET_KEY from Clerk Dashboard → API Keys, then redeploy.";
+    }
+    return NextResponse.json({ error }, { status: 500 });
   }
 }
