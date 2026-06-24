@@ -3,6 +3,7 @@ import { Geist_Mono } from "next/font/google";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { AppProviders } from "@/components/AppProviders";
+import { getClerkProviderProps } from "@/lib/clerkClientConfig";
 import { getSiteUrl } from "@/lib/siteUrl";
 import "./globals.css";
 
@@ -81,7 +82,7 @@ export default function RootLayout({
       <body
         className={`${inter.className} flex min-h-full flex-col font-sans antialiased [-webkit-font-smoothing:antialiased] transition-[background-color,color,border-color] duration-300 ease-out`}
       >
-        <ClerkProvider>
+        <ClerkProvider {...getClerkProviderProps()}>
           <AppProviders>{children}</AppProviders>
         </ClerkProvider>
       </body>

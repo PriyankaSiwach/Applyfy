@@ -1,5 +1,6 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useState } from "react";
 import { useSubscription } from "@/components/subscription/SubscriptionProvider";
@@ -38,13 +39,22 @@ const faqs = [
 ] as const;
 
 export default function PricingPage() {
-  const { tier, mounted, setTier } = useSubscription();
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { tier, mounted } = useSubscription();
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [checkoutPlan, setCheckoutPlan] = useState<null | "pro" | "premium">(
     null,
   );
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   async function startCheckout(plan: "pro" | "premium") {
+    setCheckoutError(null);
+    if (!authLoaded) return;
+    if (!isSignedIn) {
+      const returnUrl = encodeURIComponent("/pricing");
+      window.location.href = `/sign-in?redirect_url=${returnUrl}`;
+      return;
+    }
     setCheckoutPlan(plan);
     try {
       const res = await fetch("/api/stripe/checkout", {
@@ -54,12 +64,21 @@ export default function PricingPage() {
       });
       const data = (await res.json()) as { url?: string; error?: string };
       if (!res.ok) {
-        console.error(data.error ?? "Checkout failed");
+        setCheckoutError(
+          data.error ??
+            (res.status === 401
+              ? "Please sign in to subscribe."
+              : "Checkout failed. Try again or contact support."),
+        );
         return;
       }
-      if (data.url) window.location.href = data.url;
+      if (data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      setCheckoutError("Checkout session did not return a payment URL.");
     } catch {
-      /* ignore */
+      setCheckoutError("Could not reach checkout. Check your connection and try again.");
     } finally {
       setCheckoutPlan(null);
     }
@@ -78,6 +97,14 @@ export default function PricingPage() {
           <p className="mx-auto mt-3 max-w-lg text-center text-lg text-[var(--text-secondary)]">
             Start free. Upgrade when you&apos;re ready. Cancel anytime.
           </p>
+          {checkoutError ? (
+            <p
+              className="mx-auto mt-4 max-w-lg rounded-xl border border-[#fecaca] bg-[#fef2f2] px-4 py-3 text-center text-sm text-[#b91c1c]"
+              role="alert"
+            >
+              {checkoutError}
+            </p>
+          ) : null}
         </div>
 
         <div className="mx-auto mt-12 flex max-w-[1100px] flex-col items-stretch gap-5 lg:flex-row lg:items-stretch lg:justify-center lg:py-4">
@@ -149,16 +176,6 @@ export default function PricingPage() {
                   ? "Subscribed"
                   : "Subscribe"}
             </button>
-            <p className="mt-3 text-center text-[11px] text-[var(--text-muted)]">
-              Dev:{" "}
-              <button
-                type="button"
-                className="font-semibold text-[var(--brand)] underline"
-                onClick={() => setTier("pro")}
-              >
-                simulate Pro
-              </button>
-            </p>
             <div className="my-7 h-px shrink-0 bg-[var(--border)]" />
             <p className="mb-4 shrink-0 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--text-muted)]">
               What&apos;s included
@@ -199,16 +216,6 @@ export default function PricingPage() {
                   ? "Subscribed"
                   : "Subscribe"}
             </button>
-            <p className="mt-3 text-center text-[11px] text-[var(--text-muted)]">
-              Dev:{" "}
-              <button
-                type="button"
-                className="font-semibold text-[#f59e0b] underline"
-                onClick={() => setTier("premium")}
-              >
-                simulate Premium
-              </button>
-            </p>
             <div className="my-7 h-px shrink-0 bg-[var(--border)]" />
             <p className="mb-4 shrink-0 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--text-muted)]">
               What&apos;s included
