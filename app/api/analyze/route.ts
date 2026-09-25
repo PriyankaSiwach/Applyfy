@@ -18,6 +18,7 @@ import {
   sanitizeAnalyzeRewrites,
 } from "@/lib/sanitizeAnalyzeRewrites";
 import { effectiveTierFromClerkPublicMetadata } from "@/lib/effectiveSubscriptionTier";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 import {
   FREE_ANALYSIS_SCAN_LIMIT,
@@ -364,6 +365,9 @@ async function runAnalyzeOpenAI({
 
 export async function POST(request: Request) {
   const routePath = new URL(request.url).pathname;
+
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
 
   let body: unknown;
   try {

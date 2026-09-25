@@ -5,6 +5,7 @@ import type { CoverLength, CoverTone } from "@/lib/parseCoverLetterBody";
 import { parseCoverLetterBody } from "@/lib/parseCoverLetterBody";
 import { resumeTextFingerprint } from "@/lib/resumeFingerprint";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 
 export const runtime = "nodejs";
@@ -127,6 +128,9 @@ const MIN_RESUME_CHARS = 40;
 
 export async function POST(request: Request) {
   const routePath = new URL(request.url).pathname;
+
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
 
   let body: unknown;
   try {
