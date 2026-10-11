@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
 import { ApplyFlowChrome } from "@/components/applyfy/ApplyFlowChrome";
 import { StrengthEmDashLine } from "@/components/applyfy/StrengthEmDashLine";
 import { AtsScoreHistory } from "@/components/applyfy/AtsScoreHistory";
@@ -12,6 +13,10 @@ import {
   keywordChipsFromResumeLiteral,
   resumePlainForKeywordMatching,
 } from "@/lib/alignedJobKeywords";
+import {
+  resumeFileToPayloadViaAws,
+  shouldUseAwsResumePipeline,
+} from "@/lib/awsResumeExtract";
 import { resumeFileToPayload } from "@/lib/resumeFileToPayload";
 import {
   getSoftSkillMissingHint,
@@ -22,6 +27,9 @@ export default function AnalyzePage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileLabel, setFileLabel] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [extractingResume, setExtractingResume] = useState(false);
+  const fileSelectionSeqRef = useRef(0);
+  const { isSignedIn, getToken } = useAuth();
 
   const {
     resume,
@@ -96,6 +104,7 @@ export default function AnalyzePage() {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (extractingResume) return;
     setFileError(null);
     if (!resume.trim()) {
       setFileError("Upload a resume file (.pdf, .docx, .txt, or .md).");
@@ -109,6 +118,8 @@ export default function AnalyzePage() {
   }
 
   async function onFileChange(files: FileList | null) {
+    const seq = ++fileSelectionSeqRef.current;
+    setExtractingResume(false);
     setFileError(null);
     const file = files?.[0];
     if (!file) {
@@ -118,18 +129,28 @@ export default function AnalyzePage() {
       void hydrateOriginalResumePlain("");
       return;
     }
+    const viaAws = shouldUseAwsResumePipeline(file, isSignedIn);
     try {
       invalidateAnalysisForNewResume();
-      const payload = await resumeFileToPayload(file);
+      if (viaAws) setExtractingResume(true);
+      const payload = viaAws
+        ? await resumeFileToPayloadViaAws(file, getToken)
+        : await resumeFileToPayload(file);
+      if (viaAws && seq !== fileSelectionSeqRef.current) return;
       setResume(payload);
       setFileLabel(file.name);
       void hydrateOriginalResumePlain(payload);
     } catch {
+      if (viaAws && seq !== fileSelectionSeqRef.current) return;
       invalidateAnalysisForNewResume();
       setFileError("Could not read that file. Try another format.");
       setFileLabel(null);
       setResume("");
       void hydrateOriginalResumePlain("");
+    } finally {
+      if (viaAws && seq === fileSelectionSeqRef.current) {
+        setExtractingResume(false);
+      }
     }
   }
 
@@ -176,7 +197,14 @@ export default function AnalyzePage() {
                 <p className="mt-3 text-xs text-gray-500">
                   PDF, Word (.docx), or plain text (.txt / .md)
                 </p>
-                {fileLabel ? (
+                {extractingResume ? (
+                  <p
+                    className="mt-4 text-sm font-medium text-slate-600"
+                    aria-live="polite"
+                  >
+                    Extracting text...
+                  </p>
+                ) : fileLabel ? (
                   <p className="mt-4 text-sm font-medium text-slate-800">
                     Selected: {fileLabel}
                   </p>
@@ -213,7 +241,7 @@ export default function AnalyzePage() {
           <div className="mt-6 flex flex-col items-center gap-3">
             <button
               type="submit"
-              disabled={loadingAnalyze}
+              disabled={loadingAnalyze || extractingResume}
               className="rounded-lg bg-primary px-8 py-3 text-sm font-semibold text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
             >
               Run analysis
