@@ -6,11 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL =
-  process.env.ANTHROPIC_MODEL ?? "claude-3-5-haiku-20241022";
-
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 
@@ -28,15 +23,6 @@ Return ONLY valid JSON in this exact format:
   "top_strength": "one sentence about what they did best",
   "top_fix": "one sentence about the single most important improvement"
 }`;
-
-function extractAnthropicText(data: unknown): string {
-  if (typeof data !== "object" || data === null) return "";
-  const d = data as { content?: { type?: string; text?: string }[] };
-  const blocks = d.content;
-  if (!Array.isArray(blocks)) return "";
-  const textBlock = blocks.find((b) => b.type === "text" && b.text);
-  return (textBlock?.text ?? "").trim();
-}
 
 function extractOpenAIText(data: unknown): string {
   if (typeof data !== "object" || data === null) return "";
@@ -91,40 +77,6 @@ function parseDim(raw: unknown): { score: number; feedback: string } | null {
   if (score === null) return null;
   const feedback = typeof o.feedback === "string" ? o.feedback.trim() : "";
   return { score, feedback };
-}
-
-async function callAnthropicForScore(
-  userMessage: string,
-): Promise<string | null> {
-  if (!ANTHROPIC_API_KEY) return null;
-  try {
-    const res = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      cache: "no-store",
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
-    const rawText = await res.text();
-    if (!res.ok) {
-      console.error("[interview-simulator-score/anthropic]", res.status, rawText.slice(0, 300));
-      return null;
-    }
-    let data: unknown;
-    try { data = JSON.parse(rawText) as unknown; } catch { return null; }
-    return extractAnthropicText(data) || null;
-  } catch (e) {
-    console.error("[interview-simulator-score/anthropic]", e);
-    return null;
-  }
 }
 
 async function callOpenAIForScore(
@@ -191,11 +143,7 @@ export async function POST(request: Request) {
   const userMessage = `Question: ${question}\n\nAnswer: ${answer}`;
   const openaiKey = getOpenAiApiKey();
 
-  // Try Anthropic first, fall back to OpenAI
-  let text = await callAnthropicForScore(userMessage);
-  if (!text) {
-    text = await callOpenAIForScore(userMessage, openaiKey);
-  }
+  const text = await callOpenAIForScore(userMessage, openaiKey);
 
   if (!text) {
     return jsonNoStore(

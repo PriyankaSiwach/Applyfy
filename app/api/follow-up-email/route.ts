@@ -1,5 +1,6 @@
 import { extractJobTitleAndCompany } from "@/lib/jobMetaFromPosting";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
 import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
 
@@ -7,10 +8,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL =
-  process.env.ANTHROPIC_MODEL ?? "claude-3-5-haiku-20241022";
+const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+const OPENAI_MODEL = "gpt-4o";
 
 const SYSTEM_PROMPT = `You are a professional job application assistant. Generate a short, confident, non-desperate follow-up email for a job applicant. Use the resume and job posting context provided.
 Keep it under 120 words. Subject line + body only.
@@ -20,27 +19,23 @@ Subject: [subject line]
 
 [email body]`;
 
-function extractAnthropicText(data: unknown): string {
+function extractOpenAIText(data: unknown): string {
   if (typeof data !== "object" || data === null) return "";
   const d = data as {
-    content?: { type?: string; text?: string }[];
+    choices?: { message?: { content?: string } }[];
   };
-  const blocks = d.content;
-  if (!Array.isArray(blocks)) return "";
-  const textBlock = blocks.find((b) => b.type === "text" && b.text);
-  return (textBlock?.text ?? "").trim();
+  return (d.choices?.[0]?.message?.content ?? "").trim();
 }
 
 export async function POST(request: Request) {
   const premiumGate = await requirePremiumForApi(request);
   if (!premiumGate.ok) return premiumGate.response;
 
-  if (!ANTHROPIC_API_KEY) {
-    return jsonNoStore(
-      { error: "Missing ANTHROPIC_API_KEY on the server" },
-      { status: 503 },
-    );
+  const keyCheck = requireOpenAiApiKey();
+  if (!keyCheck.ok) {
+    return jsonNoStore({ error: keyCheck.error }, { status: 503 });
   }
+  const openaiKey = keyCheck.key;
 
   let body: unknown;
   try {
@@ -89,19 +84,20 @@ export async function POST(request: Request) {
 Job: ${jobTitle} at ${companyName}. Applied ${daysSinceApplied} days ago. Hiring manager: ${managerLabel}.`;
 
   try {
-    const res = await fetch(ANTHROPIC_URL, {
+    const res = await fetch(OPENAI_API_URL, {
       method: "POST",
       cache: "no-store",
       headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
+        Authorization: `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
+        model: OPENAI_MODEL,
         max_tokens: 600,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
       }),
     });
 
@@ -126,7 +122,7 @@ Job: ${jobTitle} at ${companyName}. Applied ${daysSinceApplied} days ago. Hiring
       );
     }
 
-    const text = extractAnthropicText(data);
+    const text = extractOpenAIText(data);
     if (!text) {
       return jsonNoStore(
         { error: "Couldn't generate — try again" },
