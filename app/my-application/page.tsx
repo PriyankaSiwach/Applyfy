@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { jsPDF } from "jspdf";
 import { ApplicationStepper } from "@/components/applyfy/ApplicationStepper";
@@ -15,6 +16,10 @@ import {
   sanitizeJobTitle,
 } from "@/lib/jobMetaFromPosting";
 import type { InterviewPrep } from "@/lib/analysisTypes";
+import {
+  resumeFileToPayloadViaAws,
+  shouldUseAwsResumePipeline,
+} from "@/lib/awsResumeExtract";
 import { resumeFileToPayload } from "@/lib/resumeFileToPayload";
 import { MIN_JOB_POSTING_CHARS } from "@/lib/parseAnalyzeBody";
 import { upsertTrackerApplication } from "@/lib/trackerStorage";
@@ -197,6 +202,9 @@ export default function MyApplicationPage() {
 
   const [fileLabel, setFileLabel] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [extractingResume, setExtractingResume] = useState(false);
+  const fileSelectionSeqRef = useRef(0);
+  const { isSignedIn, getToken } = useAuth();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [emailTo, setEmailTo] = useState("");
@@ -376,6 +384,8 @@ export default function MyApplicationPage() {
   }, [currentStep, maxUnlocked]);
 
   async function onFileChange(files: FileList | null) {
+    const seq = ++fileSelectionSeqRef.current;
+    setExtractingResume(false);
     setFileError(null);
     const file = files?.[0];
     if (!file) {
@@ -385,22 +395,33 @@ export default function MyApplicationPage() {
       void hydrateOriginalResumePlain("");
       return;
     }
+    const viaAws = shouldUseAwsResumePipeline(file, isSignedIn);
     try {
       invalidateAnalysisForNewResume();
-      const payload = await resumeFileToPayload(file);
+      if (viaAws) setExtractingResume(true);
+      const payload = viaAws
+        ? await resumeFileToPayloadViaAws(file, getToken)
+        : await resumeFileToPayload(file);
+      if (viaAws && seq !== fileSelectionSeqRef.current) return;
       setResume(payload);
       setFileLabel(file.name);
       void hydrateOriginalResumePlain(payload);
     } catch {
+      if (viaAws && seq !== fileSelectionSeqRef.current) return;
       invalidateAnalysisForNewResume();
       setFileError("Could not read that file. Try another format.");
       setFileLabel(null);
       setResume("");
       void hydrateOriginalResumePlain("");
+    } finally {
+      if (viaAws && seq === fileSelectionSeqRef.current) {
+        setExtractingResume(false);
+      }
     }
   }
 
   async function handleInputNext() {
+    if (extractingResume) return;
     setFileError(null);
     if (!resume.trim()) {
       setFileError("Upload a resume file (.pdf, .docx, .txt, or .md).");
@@ -789,7 +810,14 @@ export default function MyApplicationPage() {
                     <p className="mt-3 text-xs text-[#94a3b8]">
                       PDF, Word (.docx), or plain text (.txt / .md)
                     </p>
-                    {fileLabel ? (
+                    {extractingResume ? (
+                      <p
+                        className="mt-4 text-sm font-medium text-[#64748b]"
+                        aria-live="polite"
+                      >
+                        Extracting text...
+                      </p>
+                    ) : fileLabel ? (
                       <div className="mt-4 flex items-center justify-center gap-2 md:justify-start">
                         <span
                           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 shadow-sm ring-2 ring-emerald-200/80"
@@ -950,6 +978,7 @@ export default function MyApplicationPage() {
                 <PrimaryNextButton
                   label={loadingAnalyze ? "Analyzing..." : "Run analysis"}
                   onClick={handleInputNext}
+                  disabled={extractingResume}
                   loading={loadingAnalyze}
                   variant="runAnalysis"
                 />
