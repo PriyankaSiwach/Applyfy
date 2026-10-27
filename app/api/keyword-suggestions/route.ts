@@ -1,4 +1,5 @@
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { RESUME_REWRITE_HONESTY_SYSTEM } from "@/lib/prompts/resumeRewriteHonesty";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 
@@ -46,6 +47,9 @@ function extractJsonObject(text: string): Record<string, unknown> {
 }
 
 export async function POST(request: Request) {
+  const rate = await enforceOpenAiRateLimit(request, "light");
+  if (!rate.ok) return rate.response;
+
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {
     return jsonNoStore({ error: keyCheck.error }, { status: 503 });

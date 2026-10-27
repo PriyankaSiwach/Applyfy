@@ -5,6 +5,7 @@ import type {
 import { filterKeywordLabelsToJobPosting } from "@/lib/jobKeywordInPosting";
 import { filterAtsKeywordLabels } from "@/lib/jobKeywordSanitize";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 
 export const runtime = "nodejs";
@@ -134,6 +135,9 @@ function parseResult(
 }
 
 export async function POST(request: Request) {
+  const rate = await enforceOpenAiRateLimit(request, "light");
+  if (!rate.ok) return rate.response;
+
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {
     return jsonNoStore({ error: keyCheck.error }, { status: 503 });

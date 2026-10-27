@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { verifyKeywordsAgainstResume } from "@/lib/atsDeterministicKeywords";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { filterKeywordLabelsToJobPosting } from "@/lib/jobKeywordInPosting";
 import { filterAtsKeywordLabels } from "@/lib/jobKeywordSanitize";
 import { parseResumeIntoBlocks } from "@/lib/resumeEditorBlocks";
@@ -106,6 +107,9 @@ export type HybridScoreResult = {
 };
 
 export async function POST(request: Request) {
+  const rate = await enforceOpenAiRateLimit(request, "light");
+  if (!rate.ok) return rate.response;
+
   let body: unknown;
   try {
     body = await request.json();

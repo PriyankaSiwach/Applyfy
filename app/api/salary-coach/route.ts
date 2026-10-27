@@ -1,5 +1,6 @@
 import type { SalaryCoachResult } from "@/lib/salaryCoachTypes";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
 
@@ -91,6 +92,9 @@ function parseResult(raw: Record<string, unknown>): SalaryCoachResult | null {
 export async function POST(request: Request) {
   const premiumGate = await requirePremiumForApi(request);
   if (!premiumGate.ok) return premiumGate.response;
+
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
 
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {

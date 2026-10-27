@@ -1,5 +1,6 @@
 import type { PredictedQuestion } from "@/lib/analysisTypes";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
@@ -61,6 +62,9 @@ function parseQuestions(
 export async function POST(request: Request) {
   const premiumGate = await requirePremiumForApi(request);
   if (!premiumGate.ok) return premiumGate.response;
+
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
 
   let body: unknown;
   try {

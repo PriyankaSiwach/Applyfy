@@ -5,10 +5,14 @@ import { Redis } from "@upstash/redis";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
 
 /**
- * Sliding-window rate limit for OpenAI-backed routes.
- * 5 requests / minute per signed-in userId, or per IP for guests.
+ * Sliding-window rate limits for OpenAI-backed routes, per signed-in userId
+ * or per IP for guests. Two independent buckets:
+ * - heavy: 5 requests / minute (full analyses, generation, multi-call pipelines)
+ * - light: 20 requests / minute (editor re-scoring, keyword helpers, single-line rewrites)
  * Separate from lifetime/monthly usage quotas.
  */
+
+export type OpenAiRateLimitTier = "heavy" | "light";
 
 type RateLimitOk = { ok: true };
 type RateLimitBlocked = {
@@ -16,22 +20,35 @@ type RateLimitBlocked = {
   response: ReturnType<typeof jsonNoStore>;
 };
 
-let ratelimit: Ratelimit | null = null;
+const TIER_CONFIG: Record<
+  OpenAiRateLimitTier,
+  { requests: number; prefix: string }
+> = {
+  heavy: { requests: 5, prefix: "applyfy:openai" },
+  light: { requests: 20, prefix: "applyfy:openai-light" },
+};
 
-function getRatelimit(): Ratelimit | null {
+const ratelimits: Partial<Record<OpenAiRateLimitTier, Ratelimit>> = {};
+let redis: Redis | null = null;
+
+function getRatelimit(tier: OpenAiRateLimitTier): Ratelimit | null {
   const url = process.env.UPSTASH_REDIS_REST_URL?.trim();
   const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
   if (!url || !token) return null;
 
-  if (!ratelimit) {
-    ratelimit = new Ratelimit({
-      redis: new Redis({ url, token }),
-      limiter: Ratelimit.slidingWindow(5, "1 m"),
-      analytics: true,
-      prefix: "applyfy:openai",
-    });
-  }
-  return ratelimit;
+  const existing = ratelimits[tier];
+  if (existing) return existing;
+
+  if (!redis) redis = new Redis({ url, token });
+  const { requests, prefix } = TIER_CONFIG[tier];
+  const created = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(requests, "1 m"),
+    analytics: true,
+    prefix,
+  });
+  ratelimits[tier] = created;
+  return created;
 }
 
 function clientIp(request: Request): string {
@@ -47,9 +64,26 @@ function clientIp(request: Request): string {
 
 export async function enforceOpenAiRateLimit(
   request: Request,
+  tier: OpenAiRateLimitTier = "heavy",
 ): Promise<RateLimitOk | RateLimitBlocked> {
-  const limiter = getRatelimit();
+  const limiter = getRatelimit(tier);
   if (!limiter) {
+    // Production must fail closed: without Redis there is no limit on OpenAI spend.
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[openaiRateLimit] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN missing in production — rejecting request",
+      );
+      return {
+        ok: false,
+        response: jsonNoStore(
+          {
+            error: "AI features are temporarily unavailable. Please try again later.",
+            code: "RATE_LIMIT_UNAVAILABLE",
+          },
+          { status: 503 },
+        ),
+      };
+    }
     // Local/dev without Upstash: skip (do not break existing quotas).
     console.warn(
       "[openaiRateLimit] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN missing — rate limit skipped",
@@ -68,8 +102,7 @@ export async function enforceOpenAiRateLimit(
     ok: false,
     response: jsonNoStore(
       {
-        error:
-          "Too many AI requests. Limit is 5 requests per minute. Please wait and try again.",
+        error: `Too many AI requests. Limit is ${limit} requests per minute. Please wait and try again.`,
         code: "RATE_LIMITED",
         limit,
         remaining,
