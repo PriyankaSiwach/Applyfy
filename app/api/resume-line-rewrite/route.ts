@@ -1,4 +1,5 @@
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import {
   RESUME_BULLET_OPTIMIZER_SYSTEM,
   resumeBulletRewriteUserMessage,
@@ -23,6 +24,9 @@ function stripFences(s: string): string {
 }
 
 export async function POST(request: Request) {
+  const rate = await enforceOpenAiRateLimit(request, "light");
+  if (!rate.ok) return rate.response;
+
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {
     return jsonNoStore({ error: keyCheck.error }, { status: 503 });

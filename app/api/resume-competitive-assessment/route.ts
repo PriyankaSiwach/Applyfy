@@ -1,4 +1,5 @@
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import {
   generateCompetitiveAssessment,
 } from "@/lib/resumeOptimizeTwoPhase";
@@ -10,6 +11,9 @@ export const fetchCache = "force-no-store";
 export const maxDuration = 30;
 
 export async function POST(request: Request) {
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
+
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {
     return jsonNoStore({ error: keyCheck.error }, { status: 503 });

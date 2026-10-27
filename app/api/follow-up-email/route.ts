@@ -1,5 +1,6 @@
 import { extractJobTitleAndCompany } from "@/lib/jobMetaFromPosting";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
 import { cleanResumeToPlainText } from "@/lib/resumeText";
 import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
@@ -30,6 +31,9 @@ function extractOpenAIText(data: unknown): string {
 export async function POST(request: Request) {
   const premiumGate = await requirePremiumForApi(request);
   if (!premiumGate.ok) return premiumGate.response;
+
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
 
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {

@@ -1,4 +1,5 @@
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { filterAtsKeywordLabels } from "@/lib/jobKeywordSanitize";
 import { normalizeSynonymMapFromApi } from "@/lib/jobKeywordSynonymMap";
 import { requireOpenAiApiKey } from "@/lib/openAiKeyGuard";
@@ -25,6 +26,9 @@ function stripJsonObject(text: string): Record<string, unknown> {
 }
 
 export async function POST(request: Request) {
+  const rate = await enforceOpenAiRateLimit(request, "light");
+  if (!rate.ok) return rate.response;
+
   const keyCheck = requireOpenAiApiKey();
   if (!keyCheck.ok) {
     return jsonNoStore({ error: keyCheck.error }, { status: 503 });

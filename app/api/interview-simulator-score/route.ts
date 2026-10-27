@@ -1,5 +1,6 @@
 import type { InterviewSimulatorScoreResult } from "@/lib/interviewSimulatorScore";
 import { jsonNoStore } from "@/lib/jsonResponseNoStore";
+import { enforceOpenAiRateLimit } from "@/lib/openaiRateLimit";
 import { getOpenAiApiKey } from "@/lib/getOpenAiApiKey";
 import { requirePremiumForApi } from "@/lib/requirePremiumForApi";
 export const runtime = "nodejs";
@@ -118,6 +119,9 @@ async function callOpenAIForScore(
 export async function POST(request: Request) {
   const premiumGate = await requirePremiumForApi(request);
   if (!premiumGate.ok) return premiumGate.response;
+
+  const rate = await enforceOpenAiRateLimit(request);
+  if (!rate.ok) return rate.response;
 
   let body: unknown;
   try {
